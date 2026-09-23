@@ -105,13 +105,30 @@ def _get_info_map() -> dict[str, str]:
     """Build a lowercase-keyword → value mapping from config."""
     if not _INFO_MAP:
         _INFO_MAP.update({
-            "name":   config.STUDENT_NAME,
-            "roll":   config.STUDENT_ROLL,
+            "name": config.STUDENT_NAME,
+            "full name": config.STUDENT_NAME,
+            "student name": config.STUDENT_NAME,
+            "your name": config.STUDENT_NAME,
+            "first name": config.STUDENT_NAME,
+            "last name": config.STUDENT_NAME,
+            "enter your full name": config.STUDENT_NAME,
+            
+            "roll": config.STUDENT_ROLL,
+            "roll no": config.STUDENT_ROLL,
+            "roll number": config.STUDENT_ROLL,
+            "enter your roll number": config.STUDENT_ROLL,
+            
             "branch": config.STUDENT_BRANCH,
+            "enter your branch": config.STUDENT_BRANCH,
+            
             "section": config.STUDENT_SECTION,
-            "email":  config.STUDENT_EMAIL,
+            "sec": config.STUDENT_SECTION,
+            "select your section": config.STUDENT_SECTION,
+            
+            "email": config.STUDENT_EMAIL,
+            "email address": config.STUDENT_EMAIL,
             "e-mail": config.STUDENT_EMAIL,
-            "mail":   config.STUDENT_EMAIL,
+            "mail": config.STUDENT_EMAIL,
         })
     return _INFO_MAP
 
@@ -138,10 +155,19 @@ def auto_fill_student_info(page: Page) -> int:
             continue
         header_text = header_els[0].inner_text().strip().lower()
 
-        # Check if any keyword matches.
+        # Guard 1: The "Points" Check.
+        # Google Forms personal info fields NEVER have point values.
+        if "point" in header_text:
+            continue
+
+        # Guard 2: Strict First-Line Matching.
+        # Playwright extracts the whole container (e.g., "Name \n * \n Your answer").
+        # We split by newline to look ONLY at the actual question title.
+        first_line = header_text.split('\n')[0].replace('*', '').strip()
+
         matched_value: Optional[str] = None
         for keyword, value in info.items():
-            if keyword in header_text:
+            if first_line == keyword:
                 matched_value = value
                 break
 
