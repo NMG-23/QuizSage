@@ -158,6 +158,10 @@ def auto_fill_student_info(page: Page) -> int:
         _human_delay()
         target.fill(matched_value)
         _human_delay()
+        
+        # Tag this container so we skip parsing it as a quiz question
+        container.evaluate("el => el.setAttribute('data-quizsage-ignore', 'true')")
+        
         filled += 1
 
     # Also globally search for the "Record email" checkbox and tick it.
@@ -236,8 +240,8 @@ def parse_current_page(page: Page, start_index: int = 0) -> list[ParsedQuestion]
 
     idx = start_index
     for container in containers:
-        # Skip the native email-collection widget.
-        if _is_email_collection_widget(container):
+        # Skip the native email-collection widget and auto-filled student info fields.
+        if _is_email_collection_widget(container) or container.get_attribute("data-quizsage-ignore") == "true":
             continue
 
         # ── Question title ──────────────────────────────────

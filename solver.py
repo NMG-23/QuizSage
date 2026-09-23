@@ -127,13 +127,13 @@ _gemini_pool = _GeminiKeyPool()
 #  LLM callers
 # ════════════════════════════════════════════════════════════════
 
-def _call_groq(prompt: str) -> str:
+def _call_groq(prompt: str, model_override: str | None = None) -> str:
     """Send a text-only prompt to Groq and return the raw response."""
     from groq import Groq  # lazy import to avoid load-time crash
 
     client = Groq(api_key=config.GROQ_API_KEY)
     chat = client.chat.completions.create(
-        model=config.GROQ_MODEL,
+        model=model_override or config.GROQ_MODEL,
         messages=[
             {"role": "system", "content": _get_system_prompt()},
             {"role": "user",   "content": prompt},
@@ -262,10 +262,18 @@ def solve_questions(
             raw = _call_groq(prompt)
             batch = _parse_llm_json(raw)
             results.extend(batch.answers)
-            print(f"  ✅ Groq solved {len(batch.answers)} text question(s)")
+            print(f"  ✅ Groq ({config.GROQ_MODEL}) solved {len(batch.answers)} text question(s)")
         except Exception as exc:
-            print(f"  ⚠️  Groq failed ({exc}), cascading to Gemini …")
-            groq_failed = True
+            print(f"  ⚠️  Groq ({config.GROQ_MODEL}) failed: {exc}")
+            try:
+                print(f"  🔄 Retrying Groq with fallback model ({config.GROQ_FALLBACK_MODEL})...")
+                raw = _call_groq(prompt, model_override=config.GROQ_FALLBACK_MODEL)
+                batch = _parse_llm_json(raw)
+                results.extend(batch.answers)
+                print(f"  ✅ Groq fallback ({config.GROQ_FALLBACK_MODEL}) solved {len(batch.answers)} text question(s)")
+            except Exception as exc_fallback:
+                print(f"  ⚠️  Groq fallback also failed ({exc_fallback}), cascading to Gemini …")
+                groq_failed = True
 
     # ── Step 2: Gemini for multimodal + cascade ─────────────
     gemini_qs = list(image_qs)

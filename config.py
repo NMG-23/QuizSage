@@ -16,9 +16,10 @@ load_dotenv()
 # ════════════════════════════════════════════════════════════════
 
 # Groq — used for ultra-fast pure-text question solving.
-# Model: llama-3.1-70b-versatile
+# Model: llama-3.3-70b-versatile
 GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL: str = "llama-3.1-70b-versatile"
+GROQ_MODEL: str = "llama-3.3-70b-versatile"
+GROQ_FALLBACK_MODEL: str = "qwen-3-32b" # As per user request for Qwen3 32B
 
 # Gemini — used for multimodal questions (images) and as a
 # cascade failover when Groq rate-limits.
