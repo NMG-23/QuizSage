@@ -642,13 +642,6 @@ async def index():
                 raw_url = row.get("raw_url", "")
                 if not raw_url: return
                 
-                with ui.dialog() as resolve_dialog, ui.card().classes("bg-zinc-900 border border-zinc-700"):
-                    ui.label("Re-evaluate Draft?").classes("text-lg font-bold text-amber-400")
-                    ui.label("Are you sure you want to re-evaluate this form? Any previous draft answers will be overwritten.").classes("text-sm text-zinc-300 mt-2")
-                    with ui.row().classes("w-full justify-end gap-3 mt-4"):
-                        ui.button("Cancel", on_click=lambda: resolve_dialog.submit(False)).props("flat color=grey")
-                        ui.button("Yes, Re-solve", on_click=lambda: resolve_dialog.submit(True), color="amber").props("unelevated rounded")
-                
                 confirmed = await resolve_dialog
                 if confirmed:
                     url_input.value = raw_url
@@ -660,6 +653,17 @@ async def index():
 
             # Initial load
             refresh_history()
+
+    # ════════════════════════════════════════════════════════════
+    #  Re-solve dialog
+    # ════════════════════════════════════════════════════════════
+    
+    with ui.dialog() as resolve_dialog, ui.card().classes("bg-zinc-900 border border-zinc-700"):
+        ui.label("Re-evaluate Draft?").classes("text-lg font-bold text-amber-400")
+        ui.label("Are you sure you want to re-evaluate this form? Any previous draft answers will be overwritten.").classes("text-sm text-zinc-300 mt-2")
+        with ui.row().classes("w-full justify-end gap-3 mt-4"):
+            ui.button("Cancel", on_click=lambda: resolve_dialog.submit(False)).props("flat color=grey")
+            ui.button("Yes, Re-solve", on_click=lambda: resolve_dialog.submit(True), color="amber").props("unelevated rounded")
 
     # ════════════════════════════════════════════════════════════
     #  Duplicate-check dialog
