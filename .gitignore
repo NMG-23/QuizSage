@@ -1,0 +1,35 @@
+# ──────────────────────────────────────────────
+# QuizSage .gitignore
+# ──────────────────────────────────────────────
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Playwright persistent browser profile (contains cookies/sessions)
+google_profile/
+Yugank - College/
+* - College/
+
+# Solved-form history database
+solved_history.json
+student_profile.json
+
+# Environment files that may hold API keys
+.env
