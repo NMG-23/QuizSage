@@ -34,11 +34,11 @@ GEMINI_MODEL: str = "gemini-3.6-flash"
 #  STUDENT INFO — used by the auto-fill feature
 # ════════════════════════════════════════════════════════════════
 
-STUDENT_NAME: str  = "Yugank Bhende"
-STUDENT_ROLL: str  = "398"
-STUDENT_BRANCH: str = "CSE"
-STUDENT_EMAIL: str = "yugankrbhende.cse25f@kdkce.edu.in"
-STUDENT_SECTION: str = "B"
+STUDENT_NAME: str  = "Your Name"
+STUDENT_ROLL: str  = "101"
+STUDENT_BRANCH: str = "Computer Science"
+STUDENT_EMAIL: str = "student@example.com"
+STUDENT_SECTION: str = "Section A"
 
 # ════════════════════════════════════════════════════════════════
 #  BEHAVIOUR FLAGS
@@ -77,7 +77,7 @@ PAGE_TRANSITION_WAIT: float = 2.0
 # ════════════════════════════════════════════════════════════════
 
 # Playwright persistent browser profile directory.
-BROWSER_PROFILE_DIR: str = "Yugank - College"
+BROWSER_PROFILE_DIR: str = "google_profile"
 
 # Local JSON database for duplicate tracking.
 HISTORY_FILE: str = "solved_history.json"

@@ -2,7 +2,7 @@ import time
 from playwright.sync_api import sync_playwright
 import config
 
-print("Launching browser with the 'Yugank - College' profile...")
+print("Launching browser with the 'google_profile' profile...")
 print("Please log in to your Google account in the browser window.")
 print("Close the browser window or press Ctrl+C in this terminal when you are done.")
 

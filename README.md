@@ -114,5 +114,4 @@ Scroll down to the **Form History** card to view your past runs. If you discarde
 
 This project is open-source and licensed under the [MIT License](LICENSE).
 
----
-*Created with ❤️ by Yugank Bhende.*
+*Created with ❤️ by QuizSage Contributors.*
