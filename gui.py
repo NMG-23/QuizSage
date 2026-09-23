@@ -133,6 +133,9 @@ def _check_history(url: str) -> dict | None:
 def _run_solve_pipeline(
     url: str,
     log_writer: _LogWriter,
+    wait_for_user_action: threading.Event = None,
+    user_decision: dict = None,
+    show_manual_actions: callable = None,
 ) -> tuple[list[ParsedQuestion], list[AnswerItem], str]:
     """
     Execute the full QuizSage pipeline.  This function is called
@@ -265,17 +268,45 @@ def _run_solve_pipeline(
                 print(f"Form {status}!")
             elif submit_btn:
                 print("AUTO_SUBMIT is OFF — answers filled, not submitted.")
-                print("Review the audit table then submit manually in browser.")
+                print("Review the audit table and use the UI buttons to submit or discard.")
                 history_manager.record_run(url, total_solved, "filled")
                 status = "filled"
+
+                if show_manual_actions and wait_for_user_action is not None and user_decision is not None:
+                    show_manual_actions()
+                    
+                    # Wait for UI interaction (up to 10 mins)
+                    waited = wait_for_user_action.wait(timeout=600)
+                    
+                    if not waited:
+                        print("\n⏳ Timeout reached (10 mins). Discarding and closing browser.")
+                        status = "timeout"
+                    else:
+                        if user_decision.get("submit") is True:
+                            print("\n✅ User confirmed submission from UI. Submitting...")
+                            submit_btn.scroll_into_view_if_needed()
+                            time.sleep(0.5)
+                            submit_btn.click()
+                            time.sleep(3)
+                            
+                            if form_parser.check_validation_errors(page):
+                                print("⚠️ Validation error on submit! Check browser.")
+                                status = "validation_error"
+                            else:
+                                status = "submitted"
+                            
+                            history_manager.record_run(url, total_solved, status)
+                            print(f"Form {status}!")
+                        else:
+                            print("\n🚫 User discarded the run. Closing browser.")
+                            status = "discarded"
             else:
                 history_manager.record_run(url, total_solved, "no_submit_btn")
                 print("No Submit button found — answers filled but not submitted.")
                 status = "no_submit_btn"
 
-            # Keep browser open so user can review / submit manually.
-            print("\nBrowser will remain open. Close it manually when done.")
-            # Don't close context — let user interact.
+            # Context closes when 'with' block exits.
+            print("\nBrowser context closing gracefully.")
 
     except Exception as exc:
         print(f"\n❌ FATAL ERROR: {exc}")
@@ -314,6 +345,9 @@ async def index():
     # ── Reactive state ─────────────────────────────────────────
     status_label = STATUS_IDLE
     results_rows: list[dict] = []
+    
+    wait_for_user_action = threading.Event()
+    user_decision = {}
 
     # ── HEADER ─────────────────────────────────────────────────
     with ui.header().classes("bg-[#0f0f0f] border-b border-zinc-800"):
@@ -442,6 +476,9 @@ async def index():
                 profile_status.text = "✓ Saved"
                 ui.notify("Profile saved!", type="positive", position="bottom")
 
+            # Forward declaration so history table can trigger solving
+            async def on_solve(): pass 
+            
             ui.button(
                 "💾 Save Profile", on_click=save_profile, color="#7c3aed"
             ).classes("mt-2").props("rounded unelevated size=sm")
@@ -501,6 +538,128 @@ async def index():
                 </q-td>
                 """,
             )
+            
+            # Manual Action Buttons
+            with ui.row().classes("w-full justify-end gap-4 mt-4 hidden") as manual_action_container:
+                
+                def on_discard():
+                    user_decision["submit"] = False
+                    wait_for_user_action.set()
+                    manual_action_container.classes(add="hidden")
+                    
+                async def on_submit():
+                    with ui.dialog() as confirm_dialog, ui.card().classes("bg-zinc-900 border border-zinc-700"):
+                        ui.label("Submit Form?").classes("text-lg font-bold text-zinc-200")
+                        ui.label("Are you sure you want to submit this form in the browser?").classes("text-sm text-zinc-400 mt-2")
+                        with ui.row().classes("w-full justify-end gap-3 mt-4"):
+                            ui.button("Cancel", on_click=lambda: confirm_dialog.submit(False)).props("flat color=grey")
+                            ui.button("Yes, Submit", on_click=lambda: confirm_dialog.submit(True), color="green").props("unelevated rounded")
+                    
+                    confirmed = await confirm_dialog
+                    if confirmed:
+                        user_decision["submit"] = True
+                        wait_for_user_action.set()
+                        manual_action_container.classes(add="hidden")
+                        _set_status(STATUS_RUNNING)
+
+                ui.button("Discard & Close", on_click=on_discard, color="grey").props("outline rounded")
+                ui.button("Submit Form", on_click=on_submit, color="green").props("unelevated rounded")
+
+        # ─── Form History ───────────────────────────────
+        with ui.card().classes(
+            "w-full bg-zinc-900/80 border border-zinc-800 backdrop-blur"
+        ):
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Form History").classes("text-lg font-semibold text-zinc-300 mb-2")
+                ui.button(icon="refresh", on_click=lambda: refresh_history()).props("flat round size=sm color=grey")
+                
+            ui.separator().classes("mb-3")
+            
+            history_table = ui.table(
+                columns=[
+                    {"name": "date", "label": "Date", "field": "date", "align": "left", "sortable": True},
+                    {"name": "url", "label": "Form URL", "field": "url", "align": "left"},
+                    {"name": "questions", "label": "Questions", "field": "questions", "align": "center"},
+                    {"name": "status", "label": "Status", "field": "status", "align": "center", "sortable": True},
+                    {"name": "action", "label": "Action", "field": "action", "align": "center"},
+                ],
+                rows=[]
+            ).classes("w-full").props('dense flat bordered separator="cell" row-key="url"')
+
+            def refresh_history():
+                hist = history_manager._load_history()
+                rows = []
+                sorted_hist = sorted(hist.items(), key=lambda x: x[1].get("timestamp", ""), reverse=True)
+                for k, v in sorted_hist:
+                    display_url = k
+                    if len(display_url) > 60:
+                        display_url = display_url[:57] + "..."
+                    
+                    ts = v.get("timestamp", "")
+                    if ts:
+                        try:
+                            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                            ts_display = dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            ts_display = ts
+                    else:
+                        ts_display = "Unknown"
+                        
+                    rows.append({
+                        "date": ts_display,
+                        "url": display_url,
+                        "raw_url": k,
+                        "questions": str(v.get("questions_solved", "?")),
+                        "status": v.get("status", "unknown")
+                    })
+                history_table.rows = rows
+                history_table.update()
+
+            history_table.add_slot(
+                "body-cell-status",
+                r"""
+                <q-td :props="props">
+                    <q-badge
+                        :color="props.value === 'submitted' ? 'green' : (props.value === 'filled' ? 'amber' : 'red')"
+                        :label="props.value"
+                        class="text-sm px-2 py-1"
+                    />
+                </q-td>
+                """,
+            )
+            
+            history_table.add_slot(
+                "body-cell-action",
+                r"""
+                <q-td :props="props">
+                    <q-btn v-if="props.row.status !== 'submitted'" size="sm" color="purple" outline label="Re-solve" @click="() => $emit('resolve', props.row)" />
+                </q-td>
+                """,
+            )
+
+            async def handle_resolve(e):
+                row = e.args
+                raw_url = row.get("raw_url", "")
+                if not raw_url: return
+                
+                with ui.dialog() as resolve_dialog, ui.card().classes("bg-zinc-900 border border-zinc-700"):
+                    ui.label("Re-evaluate Draft?").classes("text-lg font-bold text-amber-400")
+                    ui.label("Are you sure you want to re-evaluate this form? Any previous draft answers will be overwritten.").classes("text-sm text-zinc-300 mt-2")
+                    with ui.row().classes("w-full justify-end gap-3 mt-4"):
+                        ui.button("Cancel", on_click=lambda: resolve_dialog.submit(False)).props("flat color=grey")
+                        ui.button("Yes, Re-solve", on_click=lambda: resolve_dialog.submit(True), color="amber").props("unelevated rounded")
+                
+                confirmed = await resolve_dialog
+                if confirmed:
+                    url_input.value = raw_url
+                    # Scroll up to the top naturally
+                    ui.run_javascript("window.scrollTo({top: 0, behavior: 'smooth'});")
+                    await on_solve()
+                    
+            history_table.on("resolve", handle_resolve)
+
+            # Initial load
+            refresh_history()
 
     # ════════════════════════════════════════════════════════════
     #  Duplicate-check dialog
@@ -563,12 +722,20 @@ async def index():
         # ── Run in background thread ───────────────────────────
         _set_status(STATUS_RUNNING)
         solve_btn.disable()
+        manual_action_container.classes(add="hidden")
 
         log_writer = _LogWriter(log_box)
 
         try:
+            wait_for_user_action.clear()
+            user_decision.clear()
+            
+            def show_manual_actions():
+                manual_action_container.classes(remove="hidden")
+                
             all_q, all_a, final_status = await run.io_bound(
-                _run_solve_pipeline, raw_url, log_writer
+                _run_solve_pipeline, raw_url, log_writer,
+                wait_for_user_action, user_decision, show_manual_actions
             )
 
             # ── Populate audit table ───────────────────────────
@@ -596,6 +763,8 @@ async def index():
                 _set_status(STATUS_ERROR)
             else:
                 _set_status(STATUS_COMPLETED)
+                
+            refresh_history()
 
         except Exception as exc:
             log_box.push(f"❌ Unexpected error: {exc}")
