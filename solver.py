@@ -310,13 +310,12 @@ def solve_questions(
         if q.index in index_map:
             final.append(index_map[q.index])
         else:
-            # Fallback: pick first option or empty.
-            fallback_opts = [q.options[0].text] if q.options else []
+            # Fallback: return empty selection to preserve any existing draft choices.
             final.append(AnswerItem(
                 question_index=q.index,
-                selected_options=fallback_opts,
+                selected_options=[],
                 short_answer_text=None,
                 confidence=0.0,
-                reasoning="No LLM answer received — fallback applied.",
+                reasoning="No LLM answer received — fallback applied (preserving draft).",
             ))
     return final

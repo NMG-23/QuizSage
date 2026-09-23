@@ -390,7 +390,7 @@ def _apply_choice(
     for answer_text in selected_texts:
         match = _find_best_match(question.options, answer_text)
 
-        if question.q_type == "checkbox":
+        if question.q_type in ("checkbox", "radio"):
             # Only click if NOT already checked.
             already_checked = match.locator.get_attribute("aria-checked")
             if already_checked == "true":

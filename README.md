@@ -15,8 +15,8 @@
 ## ✨ Key Features
 
 - **Dual-LLM Cascade Routing**: 
-  - **Text-Only Questions**: Handled by **Groq (`llama-3.3-70b`)** for instantaneous, zero-latency inference.
-  - **Image & Multimodal Questions**: Automatically falls back to **Google Gemini (`gemini-2.0-flash`)** if embedded images are detected or if Groq fails.
+  - **Text-Only Questions**: Handled by **Groq (`llama-3.1-70b-versatile`)** for instantaneous, zero-latency inference.
+  - **Image & Multimodal Questions**: Automatically falls back to **Google Gemini (`gemini-3.6-flash`)** if embedded images are detected or if Groq fails.
 - **Stealth Browser Automation**: Uses Playwright with anti-detection flags (`AutomationControlled` disabled, randomized typing delays, smooth scrolling) to avoid triggering CAPTCHAs.
 - **Persistent Google Sessions**: No need to log in repeatedly! QuizSage maintains a secure, local persistent Chromium profile (`login.py`) so you can bypass restricted form locks seamlessly.
 - **Auto-Fill Student Profile**: Detects Name, Roll Number, Branch, Section, and Email fields automatically.
@@ -24,6 +24,7 @@
   - **Live Audit Table**: Highlights low-confidence AI answers in red so you can double-check the reasoning before submitting.
   - **Form History**: Automatically logs your runs (Submitted, Discarded, Blocked).
   - **Re-Solve Capability**: 1-click re-evaluation of draft forms from your history.
+  - **Draft Preservation**: Intelligently leaves your existing manually selected answers untouched if the AI is uncertain or encounters an API error, ensuring safe re-evaluations.
   - **Safe UI Submission**: Thread-synchronized "Submit" and "Discard" buttons directly inside the dashboard.
 
 ---

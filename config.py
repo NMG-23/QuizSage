@@ -16,17 +16,17 @@ load_dotenv()
 # ════════════════════════════════════════════════════════════════
 
 # Groq — used for ultra-fast pure-text question solving.
-# Model: llama3-70b-8192
+# Model: llama-3.1-70b-versatile
 GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL: str = "llama3-70b-8192"
+GROQ_MODEL: str = "llama-3.1-70b-versatile"
 
 # Gemini — used for multimodal questions (images) and as a
 # cascade failover when Groq rate-limits.
-# Model: gemini-2.0-flash (aliased from spec's "gemini-3.8-flash")
+# Model: gemini-3.6-flash
 # Provide multiple keys for round-robin rotation to dodge per-key
 # rate limits.
 GEMINI_API_KEYS: list[str] = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
-GEMINI_MODEL: str = "gemini-2.0-flash"
+GEMINI_MODEL: str = "gemini-3.6-flash"
 
 # ════════════════════════════════════════════════════════════════
 #  STUDENT INFO — used by the auto-fill feature
