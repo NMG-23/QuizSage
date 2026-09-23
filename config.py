@@ -16,10 +16,11 @@ load_dotenv()
 # ════════════════════════════════════════════════════════════════
 
 # Groq — used for ultra-fast pure-text question solving.
-# Model: llama3-8b-8192
+# Model: openai/gpt-oss-120b
 GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL: str = "llama3-8b-8192"
-GROQ_FALLBACK_MODEL: str = "mixtral-8x7b-32768"
+GROQ_MODEL: str = "openai/gpt-oss-120b"
+GROQ_FALLBACK_MODEL: str = "qwen/qwen3.8-27b"
+GROQ_TERTIARY_MODEL: str = "openai/gpt-oss-20b"
 
 # Gemini — used for multimodal questions (images) and as a
 # cascade failover when Groq rate-limits.

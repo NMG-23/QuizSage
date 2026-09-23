@@ -272,8 +272,16 @@ def solve_questions(
                 results.extend(batch.answers)
                 print(f"  ✅ Groq fallback ({config.GROQ_FALLBACK_MODEL}) solved {len(batch.answers)} text question(s)")
             except Exception as exc_fallback:
-                print(f"  ⚠️  Groq fallback also failed ({exc_fallback}), cascading to Gemini …")
-                groq_failed = True
+                print(f"  ⚠️  Groq fallback also failed ({exc_fallback})")
+                try:
+                    print(f"  🔄 Retrying Groq with tertiary fallback model ({config.GROQ_TERTIARY_MODEL})...")
+                    raw = _call_groq(prompt, model_override=config.GROQ_TERTIARY_MODEL)
+                    batch = _parse_llm_json(raw)
+                    results.extend(batch.answers)
+                    print(f"  ✅ Groq tertiary fallback ({config.GROQ_TERTIARY_MODEL}) solved {len(batch.answers)} text question(s)")
+                except Exception as exc_tertiary:
+                    print(f"  ⚠️  Groq tertiary fallback also failed ({exc_tertiary}), cascading to Gemini …")
+                    groq_failed = True
 
     # ── Step 2: Gemini for multimodal + cascade ─────────────
     gemini_qs = list(image_qs)
