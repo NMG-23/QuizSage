@@ -12,14 +12,15 @@
 
 ---
 
-## ✨ Key Features
+## 🚀 Key Features
 
-- **Dual-LLM Cascade Routing**: 
-  - **Text-Only Questions**: Handled by **Groq (`llama-3.1-70b-versatile`)** for instantaneous, zero-latency inference.
-  - **Image & Multimodal Questions**: Automatically falls back to **Google Gemini (`gemini-3.6-flash`)** if embedded images are detected or if Groq fails.
+- **4-Tier LLM Cascade Routing**: 
+  - **Primary**: **Groq (`openai/gpt-oss-120b`)** for instantaneous, zero-latency inference on text questions.
+  - **Secondary & Tertiary Fallbacks**: Automatically retries on **Groq (`qwen/qwen3.8-27b`)** and **Groq (`openai/gpt-oss-20b`)** if the primary model fails or rate-limits.
+  - **Quaternary & Multimodal**: Seamlessly falls back to a **Google Gemini (`gemini-1.5-flash`)** key-pool for image-based questions or if Groq is completely unavailable.
 - **Stealth Browser Automation**: Uses Playwright with anti-detection flags (`AutomationControlled` disabled, randomized typing delays, smooth scrolling) to avoid triggering CAPTCHAs.
 - **Persistent Google Sessions**: No need to log in repeatedly! QuizSage maintains a secure, local persistent Chromium profile (`login.py`) so you can bypass restricted form locks seamlessly.
-- **Auto-Fill Student Profile**: Detects Name, Roll Number, Branch, Section, and Email fields automatically.
+- **Robust Student Auto-Fill**: Intelligently detects and clicks matching **Radio buttons, Checkboxes, and Textboxes** for Name, Roll Number, Branch, Section, and Email fields, tagging them so the AI never hallucinates over them.
 - **Interactive UI Dashboard**: 
   - **Live Audit Table**: Highlights low-confidence AI answers in red so you can double-check the reasoning before submitting.
   - **Form History**: Automatically logs your runs (Submitted, Discarded, Blocked).
@@ -29,7 +30,7 @@
 
 ---
 
-## 🧠 How It Works (The Pipeline)
+## ⚙️ How It Works (The Pipeline)
 
 1. **Pre-Flight Check**: When you paste a URL and hit "Solve", QuizSage normalises the link and checks your local `solved_history.json`. If it's a duplicate, it warns you.
 2. **Browser Boot-Up**: It launches a background Playwright worker thread and attaches your persistent Google profile.
@@ -37,14 +38,14 @@
 4. **Scrape & Solve Loop**:
    - Parses the DOM into `ParsedQuestion` objects (extracting titles, images, and widget types: Radio, Checkbox, Dropdown, Textbox).
    - Bundles the questions and injects your **Subject Context** (e.g. "DBMS").
-   - Ships them to the LLM backend.
+   - Ships them to the LLM backend via the 4-tier cascade pipeline.
    - Applies the AI's exact text matches to the correct DOM locators in the browser.
 5. **Pagination**: It clicks "Next" and recursively repeats the loop for multi-page forms until it finds the "Submit" button.
 6. **Thread Handoff**: The background thread pauses securely for up to 10 minutes, passing control back to your UI to await your manual "Submit" or "Discard" confirmation.
 
 ---
 
-## 📦 Installation & Setup
+## 🛠️ Installation & Setup
 
 QuizSage requires **Python 3.10+**.
 
@@ -81,7 +82,7 @@ GEMINI_API_KEYS=your_gemini_key_1,your_gemini_key_2
 
 ---
 
-## 🚀 Usage Guide
+## 📖 Usage Guide
 
 ### Step 1: Initial Google Login (One-Time Only)
 To bypass forms restricted to specific domains (like your college email), you must authenticate once.
@@ -109,7 +110,7 @@ Scroll down to the **Form History** card to view your past runs. If you discarde
 
 ---
 
-## 🛡️ License
+## ⚖️ License
 
 This project is open-source and licensed under the [MIT License](LICENSE).
 
