@@ -152,7 +152,7 @@ def auto_fill_student_info(page: Page) -> int:
         options = container.locator('div[role="radio"], div[role="checkbox"]')
         if options.count() > 0:
             for opt in options.all():
-                opt_text = opt.inner_text().strip().lower()
+                opt_text = (opt.get_attribute("aria-label") or opt.get_attribute("data-value") or opt.inner_text()).strip().lower()
                 if matched_value.lower() in opt_text:
                     if opt.get_attribute("aria-checked") != "true":
                         opt.scroll_into_view_if_needed()
