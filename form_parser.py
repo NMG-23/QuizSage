@@ -148,21 +148,36 @@ def auto_fill_student_info(page: Page) -> int:
         if matched_value is None:
             continue
 
-        # Find a text input inside this container.
-        text_input = container.locator('textarea, input[type="text"]')
-        if text_input.count() == 0:
+        # Check for radio buttons or checkboxes matching the value
+        options = container.locator('div[role="radio"], div[role="checkbox"]')
+        if options.count() > 0:
+            for opt in options.all():
+                opt_text = opt.inner_text().strip().lower()
+                if matched_value.lower() in opt_text:
+                    if opt.get_attribute("aria-checked") != "true":
+                        opt.scroll_into_view_if_needed()
+                        _human_delay()
+                        opt.click()
+                        _human_delay()
+                    
+                    container.evaluate("el => el.setAttribute('data-quizsage-ignore', 'true')")
+                    filled += 1
+                    break
             continue
 
-        target = text_input.first
-        target.click()
-        _human_delay()
-        target.fill(matched_value)
-        _human_delay()
-        
-        # Tag this container so we skip parsing it as a quiz question
-        container.evaluate("el => el.setAttribute('data-quizsage-ignore', 'true')")
-        
-        filled += 1
+        # Find a text input inside this container.
+        text_input = container.locator('textarea, input[type="text"]')
+        if text_input.count() > 0:
+            target = text_input.first
+            target.click()
+            _human_delay()
+            target.fill(matched_value)
+            _human_delay()
+            
+            # Tag this container so we skip parsing it as a quiz question
+            container.evaluate("el => el.setAttribute('data-quizsage-ignore', 'true')")
+            
+            filled += 1
 
     # Also globally search for the "Record email" checkbox and tick it.
     try:

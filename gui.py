@@ -632,7 +632,7 @@ async def index():
                 "body-cell-action",
                 r"""
                 <q-td :props="props">
-                    <q-btn v-if="props.row.status !== 'submitted'" size="sm" color="purple" outline label="Re-solve" @click="() => $emit('resolve', props.row)" />
+                    <q-btn v-if="props.row.status !== 'submitted'" size="sm" color="purple" outline label="Re-solve" @click="() => $parent.$emit('resolve', props.row)" />
                 </q-td>
                 """,
             )
@@ -642,6 +642,7 @@ async def index():
                 raw_url = row.get("raw_url", "")
                 if not raw_url: return
                 
+                resolve_dialog.open()
                 confirmed = await resolve_dialog
                 if confirmed:
                     url_input.value = raw_url
