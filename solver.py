@@ -201,7 +201,9 @@ def _call_gemini(
                 time.sleep(wait)
                 continue
             raise
-    raise last_err
+    if last_err:
+        raise last_err
+    raise RuntimeError("Failed to call Gemini")
 
 
 # ════════════════════════════════════════════════════════════════
