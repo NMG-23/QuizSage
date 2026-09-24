@@ -224,6 +224,30 @@ def _parse_llm_json(raw: str) -> AnswerBatch:
     return AnswerBatch.model_validate(data)
 
 
+def _retry_low_confidence(batch: AnswerBatch, text_qs: list[ParsedQuestion], threshold: float = 0.70) -> AnswerBatch:
+    """Re-solve low-confidence answers with Gemini; returns updated batch."""
+    for i, ans in enumerate(batch.answers):
+        if ans.confidence >= threshold:
+            continue
+        q = next((x for x in text_qs if x.index == ans.question_index), None)
+        if q is None:
+            print(f"  ⚠️  Could not match low-confidence answer (question_index={ans.question_index}). Skipping retry.")
+            continue
+
+        print(f"  ⚠️  Low confidence ({ans.confidence*100:.0f}%) on Q{q.index+1}. Retrying with Gemini...")
+        retry_prompt = [_build_question_block(q) + "\n\nAnalyze this carefully. Previous reasoning was uncertain."]
+        try:
+            retry_raw = _call_gemini(retry_prompt)
+            parsed = _parse_llm_json(retry_raw)
+            if parsed and parsed.answers:
+                retry_ans = parsed.answers[0]
+                retry_ans.question_index = q.index  # Crucial: ensure original index is preserved
+                batch.answers[i] = retry_ans
+        except Exception as e:
+            print(f"  ❌ Retry failed: {e}")
+    return batch
+
+
 # ════════════════════════════════════════════════════════════════
 #  Public API — the main solver entry point
 # ════════════════════════════════════════════════════════════════
@@ -265,19 +289,7 @@ def solve_questions(
         try:
             raw = _call_groq(prompt)
             batch = _parse_llm_json(raw)
-            
-            for i, ans in enumerate(batch.answers):
-                if ans.confidence < 0.70:
-                    q = text_qs[i]  # text_qs index matches batch.answers index
-                    print(f"  ⚠️  Low confidence ({ans.confidence*100:.0f}%) on Q{q.index+1}. Retrying with Gemini...")
-                    retry_prompt = [_build_question_block(q) + "\n\nAnalyze this carefully. Previous reasoning was uncertain."]
-                    try:
-                        retry_raw = _call_gemini(retry_prompt)
-                        retry_ans = _parse_llm_json(retry_raw).answers[0]
-                        batch.answers[i] = retry_ans
-                    except Exception as e:
-                        print(f"  ❌ Retry failed: {e}")
-                        
+            batch = _retry_low_confidence(batch, text_qs)
             results.extend(batch.answers)
             print(f"  ✅ Groq ({config.GROQ_MODEL}) solved {len(batch.answers)} text question(s)")
         except Exception as exc:
@@ -286,19 +298,7 @@ def solve_questions(
                 print(f"  🔄 Retrying Groq with fallback model ({config.GROQ_FALLBACK_MODEL})...")
                 raw = _call_groq(prompt, model_override=config.GROQ_FALLBACK_MODEL)
                 batch = _parse_llm_json(raw)
-                
-                for i, ans in enumerate(batch.answers):
-                    if ans.confidence < 0.70:
-                        q = text_qs[i]
-                        print(f"  ⚠️  Low confidence ({ans.confidence*100:.0f}%) on Q{q.index+1}. Retrying with Gemini...")
-                        retry_prompt = [_build_question_block(q) + "\n\nAnalyze this carefully. Previous reasoning was uncertain."]
-                        try:
-                            retry_raw = _call_gemini(retry_prompt)
-                            retry_ans = _parse_llm_json(retry_raw).answers[0]
-                            batch.answers[i] = retry_ans
-                        except Exception as e:
-                            print(f"  ❌ Retry failed: {e}")
-                            
+                batch = _retry_low_confidence(batch, text_qs)
                 results.extend(batch.answers)
                 print(f"  ✅ Groq fallback ({config.GROQ_FALLBACK_MODEL}) solved {len(batch.answers)} text question(s)")
             except Exception as exc_fallback:
@@ -307,19 +307,7 @@ def solve_questions(
                     print(f"  🔄 Retrying Groq with tertiary fallback model ({config.GROQ_TERTIARY_MODEL})...")
                     raw = _call_groq(prompt, model_override=config.GROQ_TERTIARY_MODEL)
                     batch = _parse_llm_json(raw)
-                    
-                    for i, ans in enumerate(batch.answers):
-                        if ans.confidence < 0.70:
-                            q = text_qs[i]
-                            print(f"  ⚠️  Low confidence ({ans.confidence*100:.0f}%) on Q{q.index+1}. Retrying with Gemini...")
-                            retry_prompt = [_build_question_block(q) + "\n\nAnalyze this carefully. Previous reasoning was uncertain."]
-                            try:
-                                retry_raw = _call_gemini(retry_prompt)
-                                retry_ans = _parse_llm_json(retry_raw).answers[0]
-                                batch.answers[i] = retry_ans
-                            except Exception as e:
-                                print(f"  ❌ Retry failed: {e}")
-                                
+                    batch = _retry_low_confidence(batch, text_qs)
                     results.extend(batch.answers)
                     print(f"  ✅ Groq tertiary fallback ({config.GROQ_TERTIARY_MODEL}) solved {len(batch.answers)} text question(s)")
                 except Exception as exc_tertiary:

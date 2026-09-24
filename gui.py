@@ -542,6 +542,7 @@ async def index():
 
             results_table = ui.table(
                 columns=[
+                    {"name": "form",       "label": "Form / Subject", "field": "form",       "align": "left", "sortable": True},
                     {"name": "qnum",       "label": "Q#",         "field": "qnum",       "align": "center", "sortable": True},
                     {"name": "type",       "label": "Type",       "field": "type",       "align": "center"},
                     {"name": "confidence", "label": "Confidence", "field": "confidence", "align": "center", "sortable": True},
@@ -734,7 +735,11 @@ async def index():
         _set_status(STATUS_RUNNING)
         solve_btn.disable()
         manual_action_container.classes(add="hidden")
-        
+        # ── Clear previous results ─────────────────────────────
+        results_table.rows.clear()
+        results_table.update()
+        log_box.clear()
+
         try:
             for i, (subject, raw_url) in enumerate(items):
                 ui.notify(f"Processing ({i+1}/{len(items)}): {subject}", type="info")
@@ -757,10 +762,6 @@ async def index():
                         ui.notify(f"Aborted {raw_url}.", type="info")
                         continue
 
-                # ── Clear previous results ─────────────────────────────
-                results_table.rows.clear()
-                results_table.update()
-                log_box.clear()
                 log_box.push(f"Processing URL {i+1}/{len(items)}: {raw_url} (Subject: {subject})")
 
                 # ── Run in background thread ───────────────────────────
@@ -788,6 +789,7 @@ async def index():
                         ans_text = "—"
 
                     rows.append({
+                        "form":       f"{subject} (Form {i+1})",
                         "qnum":       str(q.index + 1),
                         "type":       q.q_type,
                         "confidence": f"{a.confidence * 100:.0f}%",
@@ -795,7 +797,7 @@ async def index():
                         "reasoning":  a.reasoning[:150],
                     })
 
-                results_table.rows = rows
+                results_table.rows.extend(rows)
                 results_table.update()
 
                 if final_status == "error":
