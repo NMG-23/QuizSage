@@ -21,6 +21,7 @@ import os
 import sys
 import time
 import threading
+import asyncio
 from contextlib import redirect_stdout, redirect_stderr
 from datetime import datetime, timezone
 from pathlib import Path
@@ -395,10 +396,7 @@ async def index():
 
             # URL row
             with ui.row().classes("w-full items-end gap-3"):
-                url_input = ui.input(
-                    label="Google Forms URL",
-                    placeholder="https://docs.google.com/forms/d/e/…/viewform",
-                ).classes("flex-grow").props('outlined clearable color="purple"')
+                url_textarea = ui.textarea('Paste Google Form URLs (one per line)').classes("flex-grow").props('outlined clearable color="purple"')
 
             # Toggles row
             with ui.row().classes("w-full items-center gap-6 mt-2 flex-wrap"):
@@ -698,9 +696,9 @@ async def index():
     # ════════════════════════════════════════════════════════════
 
     async def on_solve():
-        raw_url = (url_input.value or "").strip()
-        if not raw_url:
-            ui.notify("Please enter a Google Forms URL.", type="warning")
+        url_list = [u.strip() for u in url_textarea.value.split('\n') if u.strip()] if url_textarea.value else []
+        if not url_list:
+            ui.notify("Please enter at least one Google Forms URL.", type="warning")
             return
 
         # ── Sync toggles to config ─────────────────────────────
@@ -708,74 +706,82 @@ async def index():
         config.HUMAN_DELAY    = human_delay_switch.value
         config.SUBJECT_CONTEXT = (subject_input.value or "").strip()
 
-        # ── Duplicate pre-check ────────────────────────────────
-        prev = _check_history(raw_url)
-        if prev:
-            ts = prev.get("timestamp", "unknown")
-            qs = prev.get("questions_solved", "?")
-            st = prev.get("status", "unknown")
-            dup_info.text = (
-                f"This form was already attempted.\n"
-                f"When: {ts}\n"
-                f"Questions: {qs}\n"
-                f"Status: {st}"
-            )
-            proceed = await dup_dialog
-            if not proceed:
-                ui.notify("Aborted.", type="info")
-                return
-
-        # ── Clear previous results ─────────────────────────────
-        results_table.rows.clear()
-        results_table.update()
-        log_box.clear()
-
-        # ── Run in background thread ───────────────────────────
         _set_status(STATUS_RUNNING)
         solve_btn.disable()
         manual_action_container.classes(add="hidden")
-
-        log_writer = _LogWriter(log_box)
-
+        
         try:
-            wait_for_user_action.clear()
-            user_decision.clear()
-            
-            def show_manual_actions():
-                manual_action_container.classes(remove="hidden")
-                
-            all_q, all_a, final_status = await run.io_bound(
-                _run_solve_pipeline, raw_url, log_writer,
-                wait_for_user_action, user_decision, show_manual_actions
-            )
+            for i, raw_url in enumerate(url_list):
+                # ── Duplicate pre-check ────────────────────────────────
+                prev = _check_history(raw_url)
+                if prev:
+                    ts = prev.get("timestamp", "unknown")
+                    qs = prev.get("questions_solved", "?")
+                    st = prev.get("status", "unknown")
+                    dup_info.text = (
+                        f"URL: {raw_url}\n"
+                        f"This form was already attempted.\n"
+                        f"When: {ts}\n"
+                        f"Questions: {qs}\n"
+                        f"Status: {st}"
+                    )
+                    dup_dialog.open()
+                    proceed = await dup_dialog
+                    if not proceed:
+                        ui.notify(f"Aborted {raw_url}.", type="info")
+                        continue
 
-            # ── Populate audit table ───────────────────────────
-            rows = []
-            for q, a in zip(all_q, all_a):
-                if a.selected_options:
-                    ans_text = " | ".join(a.selected_options)
-                elif a.short_answer_text:
-                    ans_text = a.short_answer_text[:120]
+                # ── Clear previous results ─────────────────────────────
+                results_table.rows.clear()
+                results_table.update()
+                log_box.clear()
+                log_box.push(f"Processing URL {i+1}/{len(url_list)}: {raw_url}")
+
+                # ── Run in background thread ───────────────────────────
+                log_writer = _LogWriter(log_box)
+
+                wait_for_user_action.clear()
+                user_decision.clear()
+                
+                def show_manual_actions():
+                    manual_action_container.classes(remove="hidden")
+                    
+                all_q, all_a, final_status = await run.io_bound(
+                    _run_solve_pipeline, raw_url, log_writer,
+                    wait_for_user_action, user_decision, show_manual_actions
+                )
+
+                # ── Populate audit table ───────────────────────────
+                rows = []
+                for q, a in zip(all_q, all_a):
+                    if a.selected_options:
+                        ans_text = " | ".join(a.selected_options)
+                    elif a.short_answer_text:
+                        ans_text = a.short_answer_text[:120]
+                    else:
+                        ans_text = "—"
+
+                    rows.append({
+                        "qnum":       str(q.index + 1),
+                        "type":       q.q_type,
+                        "confidence": f"{a.confidence * 100:.0f}%",
+                        "answer":     ans_text,
+                        "reasoning":  a.reasoning[:150],
+                    })
+
+                results_table.rows = rows
+                results_table.update()
+
+                if final_status == "error":
+                    _set_status(STATUS_ERROR)
                 else:
-                    ans_text = "—"
-
-                rows.append({
-                    "qnum":       str(q.index + 1),
-                    "type":       q.q_type,
-                    "confidence": f"{a.confidence * 100:.0f}%",
-                    "answer":     ans_text,
-                    "reasoning":  a.reasoning[:150],
-                })
-
-            results_table.rows = rows
-            results_table.update()
-
-            if final_status == "error":
-                _set_status(STATUS_ERROR)
-            else:
-                _set_status(STATUS_COMPLETED)
+                    _set_status(STATUS_COMPLETED)
+                    
+                refresh_history()
+                manual_action_container.classes(add="hidden")
                 
-            refresh_history()
+                if i < len(url_list) - 1:
+                    await asyncio.sleep(3)
 
         except Exception as exc:
             log_box.push(f"❌ Unexpected error: {exc}")

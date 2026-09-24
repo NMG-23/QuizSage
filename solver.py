@@ -22,6 +22,7 @@ import base64
 import json
 import re
 import textwrap
+import itertools
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -85,6 +86,7 @@ _SYSTEM_PROMPT = textwrap.dedent("""\
     - DO NOT use markdown code blocks (e.g., ```cpp).
     - DO NOT explain the code in this field. 
     - COMPLETENESS: If a question asks you to "develop", "write a program", or "create a module", you MUST output a fully complete, runnable script. Include all necessary `#include` headers, `using namespace std;`, class/struct definitions, and an `int main()` block demonstrating the code in action. Do not output bare snippets.
+    - For maths, show working step-by-step in the reasoning field before giving the final value.
     All explanations and conversational text MUST go exclusively into the `reasoning` field.
 """)
 
@@ -117,20 +119,7 @@ def _build_question_block(q: ParsedQuestion) -> str:
 #  Gemini key-pool rotation
 # ════════════════════════════════════════════════════════════════
 
-class _GeminiKeyPool:
-    """Simple round-robin iterator over the Gemini API keys."""
-    def __init__(self) -> None:
-        self._keys = list(config.GEMINI_API_KEYS)
-        self._idx = 0
-
-    def next_key(self) -> str:
-        if not self._keys:
-            raise ValueError("Missing GEMINI_API_KEYS in .env file.")
-        key = self._keys[self._idx % len(self._keys)]
-        self._idx += 1
-        return key
-
-_gemini_pool = _GeminiKeyPool()
+gemini_pool = itertools.cycle(config.GEMINI_API_KEYS) if config.GEMINI_API_KEYS else None
 
 
 # ════════════════════════════════════════════════════════════════
@@ -171,8 +160,10 @@ def _call_gemini(
     from google.genai import types
     import base64
 
-    api_key = _gemini_pool.next_key()
-    client = genai.Client(api_key=api_key)
+    if not config.GEMINI_API_KEYS:
+        raise ValueError("Missing GEMINI_API_KEYS in .env file.")
+    current_key = next(gemini_pool)
+    client = genai.Client(api_key=current_key)
 
     # Build the content parts list.
     contents = []
@@ -274,6 +265,19 @@ def solve_questions(
         try:
             raw = _call_groq(prompt)
             batch = _parse_llm_json(raw)
+            
+            for i, ans in enumerate(batch.answers):
+                if ans.confidence < 0.70:
+                    q = text_qs[i]  # text_qs index matches batch.answers index
+                    print(f"  ⚠️  Low confidence ({ans.confidence*100:.0f}%) on Q{q.index+1}. Retrying with Gemini...")
+                    retry_prompt = [_build_question_block(q) + "\n\nAnalyze this carefully. Previous reasoning was uncertain."]
+                    try:
+                        retry_raw = _call_gemini(retry_prompt)
+                        retry_ans = _parse_llm_json(retry_raw).answers[0]
+                        batch.answers[i] = retry_ans
+                    except Exception as e:
+                        print(f"  ❌ Retry failed: {e}")
+                        
             results.extend(batch.answers)
             print(f"  ✅ Groq ({config.GROQ_MODEL}) solved {len(batch.answers)} text question(s)")
         except Exception as exc:
@@ -282,6 +286,19 @@ def solve_questions(
                 print(f"  🔄 Retrying Groq with fallback model ({config.GROQ_FALLBACK_MODEL})...")
                 raw = _call_groq(prompt, model_override=config.GROQ_FALLBACK_MODEL)
                 batch = _parse_llm_json(raw)
+                
+                for i, ans in enumerate(batch.answers):
+                    if ans.confidence < 0.70:
+                        q = text_qs[i]
+                        print(f"  ⚠️  Low confidence ({ans.confidence*100:.0f}%) on Q{q.index+1}. Retrying with Gemini...")
+                        retry_prompt = [_build_question_block(q) + "\n\nAnalyze this carefully. Previous reasoning was uncertain."]
+                        try:
+                            retry_raw = _call_gemini(retry_prompt)
+                            retry_ans = _parse_llm_json(retry_raw).answers[0]
+                            batch.answers[i] = retry_ans
+                        except Exception as e:
+                            print(f"  ❌ Retry failed: {e}")
+                            
                 results.extend(batch.answers)
                 print(f"  ✅ Groq fallback ({config.GROQ_FALLBACK_MODEL}) solved {len(batch.answers)} text question(s)")
             except Exception as exc_fallback:
@@ -290,6 +307,19 @@ def solve_questions(
                     print(f"  🔄 Retrying Groq with tertiary fallback model ({config.GROQ_TERTIARY_MODEL})...")
                     raw = _call_groq(prompt, model_override=config.GROQ_TERTIARY_MODEL)
                     batch = _parse_llm_json(raw)
+                    
+                    for i, ans in enumerate(batch.answers):
+                        if ans.confidence < 0.70:
+                            q = text_qs[i]
+                            print(f"  ⚠️  Low confidence ({ans.confidence*100:.0f}%) on Q{q.index+1}. Retrying with Gemini...")
+                            retry_prompt = [_build_question_block(q) + "\n\nAnalyze this carefully. Previous reasoning was uncertain."]
+                            try:
+                                retry_raw = _call_gemini(retry_prompt)
+                                retry_ans = _parse_llm_json(retry_raw).answers[0]
+                                batch.answers[i] = retry_ans
+                            except Exception as e:
+                                print(f"  ❌ Retry failed: {e}")
+                                
                     results.extend(batch.answers)
                     print(f"  ✅ Groq tertiary fallback ({config.GROQ_TERTIARY_MODEL}) solved {len(batch.answers)} text question(s)")
                 except Exception as exc_tertiary:
