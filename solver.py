@@ -84,6 +84,7 @@ _SYSTEM_PROMPT = textwrap.dedent("""\
     - DO NOT include conversational filler (e.g., "Use function overloading...").
     - DO NOT use markdown code blocks (e.g., ```cpp).
     - DO NOT explain the code in this field. 
+    - COMPLETENESS: If a question asks you to "develop", "write a program", or "create a module", you MUST output a fully complete, runnable script. Include all necessary `#include` headers, `using namespace std;`, class/struct definitions, and an `int main()` block demonstrating the code in action. Do not output bare snippets.
     All explanations and conversational text MUST go exclusively into the `reasoning` field.
 """)
 
