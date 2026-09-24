@@ -170,6 +170,10 @@ def auto_fill_student_info(page: Page) -> int:
             if first_line == keyword:
                 matched_value = value
                 break
+        
+        # Broad match for email since it rarely appears as a paragraph starting word
+        if matched_value is None and "email" in first_line:
+            matched_value = config.STUDENT_EMAIL
 
         if matched_value is None:
             continue

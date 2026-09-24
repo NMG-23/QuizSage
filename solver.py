@@ -78,6 +78,13 @@ _SYSTEM_PROMPT = textwrap.dedent("""\
     • Use the exact option text provided — do NOT add letters or numbers.
     • If uncertain, still pick the best guess and set a low confidence.
     • Return ONLY valid JSON. No explanation outside the JSON.
+
+    CRITICAL INSTRUCTION FOR SHORT_ANSWER_TEXT: 
+    If the question asks for code, a formula, or a specific value, output ONLY the raw code or exact value in the `short_answer_text` field. 
+    - DO NOT include conversational filler (e.g., "Use function overloading...").
+    - DO NOT use markdown code blocks (e.g., ```cpp).
+    - DO NOT explain the code in this field. 
+    All explanations and conversational text MUST go exclusively into the `reasoning` field.
 """)
 
 
