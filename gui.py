@@ -22,6 +22,7 @@ import sys
 import time
 import threading
 import asyncio
+import re
 from contextlib import redirect_stdout, redirect_stderr
 from datetime import datetime, timezone
 from pathlib import Path
@@ -127,6 +128,8 @@ def _check_history(url: str) -> dict | None:
     return hist.get(key)
 
 
+_URL_RE = re.compile(r"https?://\S+")
+
 def parse_subject_file(content: str) -> list[tuple[str, str]]:
     result = []
     current_subject = "General"
@@ -134,8 +137,10 @@ def parse_subject_file(content: str) -> list[tuple[str, str]]:
         line = raw_line.strip()
         if not line:
             continue
-        if line.startswith("http"):
-            result.append((current_subject, line))
+        m = _URL_RE.search(line)
+        if m:
+            url = m.group(0).rstrip(".,;:)]}")
+            result.append((current_subject, url))
         else:
             current_subject = line
     return result
@@ -434,7 +439,7 @@ async def index():
                 ).classes("text-zinc-400")
 
                 subject_input = ui.input(
-                    label="Subject Context",
+                    label="Subject (fallback when file has no headings)",
                     placeholder='e.g. "Physics", "DBMS", "Operating Systems"',
                     value=config.SUBJECT_CONTEXT,
                 ).classes("flex-grow min-w-[200px]").props(
@@ -735,6 +740,8 @@ async def index():
         _set_status(STATUS_RUNNING)
         solve_btn.disable()
         manual_action_container.classes(add="hidden")
+        manual_subject = (subject_input.value or "").strip()
+
         # ── Clear previous results ─────────────────────────────
         results_table.rows.clear()
         results_table.update()
@@ -742,7 +749,8 @@ async def index():
 
         try:
             for i, (subject, raw_url) in enumerate(items):
-                ui.notify(f"Processing ({i+1}/{len(items)}): {subject}", type="info")
+                eff_subject = subject if subject != "General" else manual_subject
+                ui.notify(f"Processing ({i+1}/{len(items)}): {eff_subject}", type="info")
                 # ── Duplicate pre-check ────────────────────────────────
                 prev = _check_history(raw_url)
                 if prev:
@@ -762,7 +770,7 @@ async def index():
                         ui.notify(f"Aborted {raw_url}.", type="info")
                         continue
 
-                log_box.push(f"Processing URL {i+1}/{len(items)}: {raw_url} (Subject: {subject})")
+                log_box.push(f"Processing URL {i+1}/{len(items)}: {raw_url} (Subject: {eff_subject})")
 
                 # ── Run in background thread ───────────────────────────
                 log_writer = _LogWriter(log_box)
@@ -774,7 +782,7 @@ async def index():
                     manual_action_container.classes(remove="hidden")
                     
                 all_q, all_a, final_status = await run.io_bound(
-                    _run_solve_pipeline, raw_url, subject, log_writer,
+                    _run_solve_pipeline, raw_url, eff_subject, log_writer,
                     wait_for_user_action, user_decision, show_manual_actions
                 )
 
@@ -789,7 +797,7 @@ async def index():
                         ans_text = "—"
 
                     rows.append({
-                        "form":       f"{subject} (Form {i+1})",
+                        "form":       f"{eff_subject} (Form {i+1})",
                         "qnum":       str(q.index + 1),
                         "type":       q.q_type,
                         "confidence": f"{a.confidence * 100:.0f}%",
