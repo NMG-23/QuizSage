@@ -275,19 +275,28 @@ def _run_solve_pipeline(
 
             if submit_btn and config.AUTO_SUBMIT:
                 print("AUTO_SUBMIT is ON — submitting…")
-                submit_btn.scroll_into_view_if_needed()
-                time.sleep(0.5)
-                submit_btn.click()
-                time.sleep(3)
-
-                if form_parser.check_validation_errors(page):
-                    print("⚠️  Validation error on submit! Fix manually.")
-                    status = "validation_error"
+                try:
+                    submit_btn.scroll_into_view_if_needed()
+                    time.sleep(0.5)
+                    submit_btn.click()
+                    time.sleep(3)
+                except Exception as e:
+                    if "has been closed" in str(e) or "Target closed" in str(e):
+                        print("\n⚠️  Browser was closed before the submit click — answers were filled but the form was NOT submitted.")
+                        status = "browser_closed"
+                        history_manager.record_run(url, total_solved, status)
+                        print(f"Form {status}!")
+                    else:
+                        raise
                 else:
-                    status = "submitted"
+                    if form_parser.check_validation_errors(page):
+                        print("⚠️  Validation error on submit! Fix manually.")
+                        status = "validation_error"
+                    else:
+                        status = "submitted"
 
-                history_manager.record_run(url, total_solved, status)
-                print(f"Form {status}!")
+                    history_manager.record_run(url, total_solved, status)
+                    print(f"Form {status}!")
             elif submit_btn:
                 print("AUTO_SUBMIT is OFF — answers filled, not submitted.")
                 print("Review the audit table and use the UI buttons to submit or discard.")
@@ -306,19 +315,28 @@ def _run_solve_pipeline(
                     else:
                         if user_decision.get("submit") is True:
                             print("\n✅ User confirmed submission from UI. Submitting...")
-                            submit_btn.scroll_into_view_if_needed()
-                            time.sleep(0.5)
-                            submit_btn.click()
-                            time.sleep(3)
-                            
-                            if form_parser.check_validation_errors(page):
-                                print("⚠️ Validation error on submit! Check browser.")
-                                status = "validation_error"
+                            try:
+                                submit_btn.scroll_into_view_if_needed()
+                                time.sleep(0.5)
+                                submit_btn.click()
+                                time.sleep(3)
+                            except Exception as e:
+                                if "has been closed" in str(e) or "Target closed" in str(e):
+                                    print("\n⚠️  Browser was closed before the submit click — answers were filled but the form was NOT submitted.")
+                                    status = "browser_closed"
+                                    history_manager.record_run(url, total_solved, status)
+                                    print(f"Form {status}!")
+                                else:
+                                    raise
                             else:
-                                status = "submitted"
-                            
-                            history_manager.record_run(url, total_solved, status)
-                            print(f"Form {status}!")
+                                if form_parser.check_validation_errors(page):
+                                    print("⚠️ Validation error on submit! Check browser.")
+                                    status = "validation_error"
+                                else:
+                                    status = "submitted"
+                                
+                                history_manager.record_run(url, total_solved, status)
+                                print(f"Form {status}!")
                         else:
                             print("\n🚫 User discarded the run. Closing browser.")
                             status = "discarded"
@@ -327,11 +345,14 @@ def _run_solve_pipeline(
                 print("No Submit button found — answers filled but not submitted.")
                 status = "no_submit_btn"
 
-            print("\nWaiting for user to close the browser window manually...")
-            try:
-                page.wait_for_event("close", timeout=0)
-            except Exception:
-                pass
+            if config.AUTO_CLOSE_BROWSER and status == "submitted":
+                print("\nAuto-close enabled — closing browser context.")
+            else:
+                print("\nWaiting for user to close the browser window manually...")
+                try:
+                    page.wait_for_event("close", timeout=0)
+                except Exception:
+                    pass
             
             # Context closes when 'with' block exits.
             print("\nBrowser context closing gracefully.")
@@ -433,6 +454,10 @@ async def index():
             with ui.row().classes("w-full items-center gap-6 mt-2 flex-wrap"):
                 auto_submit_switch = ui.switch(
                     "Auto-Submit", value=config.AUTO_SUBMIT
+                ).classes("text-zinc-400")
+
+                auto_close_switch = ui.switch(
+                    "Auto-Close Browser", value=config.AUTO_CLOSE_BROWSER
                 ).classes("text-zinc-400")
 
                 human_delay_switch = ui.switch(
@@ -746,8 +771,9 @@ async def index():
             return
 
         # ── Sync toggles to config ─────────────────────────────
-        config.AUTO_SUBMIT    = auto_submit_switch.value
-        config.HUMAN_DELAY    = human_delay_switch.value
+        config.AUTO_SUBMIT        = auto_submit_switch.value
+        config.HUMAN_DELAY        = human_delay_switch.value
+        config.AUTO_CLOSE_BROWSER = auto_close_switch.value
 
         _set_status(STATUS_RUNNING)
         solve_btn.disable()

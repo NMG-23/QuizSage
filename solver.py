@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 import textwrap
 import itertools
 from typing import Optional
@@ -162,8 +163,6 @@ def _call_gemini(
 
     if not config.GEMINI_API_KEYS:
         raise ValueError("Missing GEMINI_API_KEYS in .env file.")
-    current_key = next(gemini_pool)
-    client = genai.Client(api_key=current_key)
 
     # Build the content parts list.
     contents = []
@@ -178,16 +177,31 @@ def _call_gemini(
                 )
             )
 
-    response = client.models.generate_content(
-        model=config.GEMINI_MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=_get_system_prompt(),
-            temperature=0.1,
-            max_output_tokens=4096,
-        ),
-    )
-    return response.text or ""
+    last_err = None
+    for attempt in range(3):
+        current_key = next(gemini_pool)
+        client = genai.Client(api_key=current_key)
+        try:
+            response = client.models.generate_content(
+                model=config.GEMINI_MODEL,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=_get_system_prompt(),
+                    temperature=0.1,
+                    max_output_tokens=4096,
+                ),
+            )
+            return response.text or ""
+        except Exception as e:
+            msg = str(e)
+            if "503" in msg or "429" in msg or "UNAVAILABLE" in msg or "RESOURCE_EXHAUSTED" in msg:
+                last_err = e
+                wait = 5 * (attempt + 1)
+                print(f"  ⚠️  Gemini transient error ({msg[:80]}). Retrying in {wait}s (attempt {attempt+1}/3)...")
+                time.sleep(wait)
+                continue
+            raise
+    raise last_err
 
 
 # ════════════════════════════════════════════════════════════════
