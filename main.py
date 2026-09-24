@@ -314,14 +314,13 @@ def main(url: str) -> None:
                 "answers were filled but not submitted.[/yellow]"
             )
 
-        # Keep browser open briefly so the user can see the result.
+        # Keep browser open until user closes it
         console.print(
-            "\n[dim]Browser will close in 5 seconds "
-            "(or press Ctrl+C)...[/dim]"
+            "\n[dim]Waiting for you to close the browser window manually...[/dim]"
         )
         try:
-            time.sleep(5)
-        except KeyboardInterrupt:
+            page.wait_for_event("close", timeout=0)
+        except Exception:
             pass
 
         context.close()

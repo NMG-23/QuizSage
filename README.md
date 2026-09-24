@@ -42,6 +42,8 @@
    - Applies the AI's exact text matches to the correct DOM locators in the browser.
 5. **Pagination**: It clicks "Next" and recursively repeats the loop for multi-page forms until it finds the "Submit" button.
 6. **Thread Handoff**: The background thread pauses securely for up to 10 minutes, passing control back to your UI to await your manual "Submit" or "Discard" confirmation.
+7. **Post-Submission**: The browser window remains open indefinitely after submission, allowing you to review your final score and feedback. The run finishes gracefully only once you manually close the browser window.
+
 
 ---
 

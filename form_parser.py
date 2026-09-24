@@ -246,16 +246,21 @@ def _is_email_collection_widget(container: Locator) -> bool:
 
 def _extract_image(container: Locator) -> Optional[bytes]:
     """
-    Look for an <img> inside the question container that is NOT a
+    Look for an <img> or div[role="img"] inside the question container that is NOT a
     structural icon (Google's small UI icons are typically < 40 px
     wide).  If found, screenshot it and return raw PNG bytes.
     """
-    images = container.locator("img").all()
+    images = container.locator('img, div[role="img"]').all()
     for img in images:
         try:
+            # CRITICAL: Force Google Forms to load the image by scrolling to it
+            img.scroll_into_view_if_needed()
+            # Wait for the image network request to finish
+            container.page.wait_for_timeout(500)
+            
             # Skip tiny structural icons.
             box = img.bounding_box()
-            if box and box["width"] > 50 and box["height"] > 50:
+            if box and box["width"] > 10 and box["height"] > 10:
                 return img.screenshot(type="png")
         except Exception:
             continue
@@ -289,6 +294,9 @@ def parse_current_page(page: Page, start_index: int = 0) -> list[ParsedQuestion]
         if _is_email_collection_widget(container) or container.get_attribute("data-quizsage-ignore") == "true":
             continue
 
+        # ── Image extraction ────────────────────────────────
+        image_bytes = _extract_image(container)
+
         # ── Question title ──────────────────────────────────
         header_els = container.locator(
             'div[role="heading"], span[class*="M7eMe"]'
@@ -296,7 +304,7 @@ def parse_current_page(page: Page, start_index: int = 0) -> list[ParsedQuestion]
         if not header_els:
             continue  # Not a real question — likely a section header.
         title = header_els[0].inner_text().strip()
-        if not title:
+        if not title and not image_bytes:
             continue
 
         # ── Detect type & gather options ────────────────────
@@ -353,9 +361,6 @@ def parse_current_page(page: Page, start_index: int = 0) -> list[ParsedQuestion]
             if txt.count() > 0:
                 q_type = "text"
                 text_locator = txt.first
-
-        # ── Image extraction ────────────────────────────────
-        image_bytes = _extract_image(container)
 
         questions.append(ParsedQuestion(
             index=idx,

@@ -305,6 +305,12 @@ def _run_solve_pipeline(
                 print("No Submit button found — answers filled but not submitted.")
                 status = "no_submit_btn"
 
+            print("\nWaiting for user to close the browser window manually...")
+            try:
+                page.wait_for_event("close", timeout=0)
+            except Exception:
+                pass
+            
             # Context closes when 'with' block exits.
             print("\nBrowser context closing gracefully.")
 
