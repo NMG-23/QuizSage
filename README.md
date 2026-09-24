@@ -17,7 +17,7 @@
 - **4-Tier LLM Cascade Routing**: 
   - **Primary**: **Groq (`openai/gpt-oss-120b`)** for instantaneous, zero-latency inference on text questions.
   - **Secondary & Tertiary Fallbacks**: Automatically retries on **Groq (`qwen/qwen3.8-27b`)** and **Groq (`openai/gpt-oss-20b`)** if the primary model fails or rate-limits.
-  - **Quaternary & Multimodal**: Seamlessly falls back to a **Google Gemini (`gemini-1.5-flash`)** key-pool for image-based questions or if Groq is completely unavailable.
+  - **Quaternary & Multimodal**: Seamlessly falls back to a **Google Gemini (`gemini-3.6-flash`)** key-pool for image-based questions or if Groq is completely unavailable.
 - **Stealth Browser Automation**: Uses Playwright with anti-detection flags (`AutomationControlled` disabled, randomized typing delays, smooth scrolling) to avoid triggering CAPTCHAs.
 - **Persistent Google Sessions**: No need to log in repeatedly! QuizSage maintains a secure, local persistent Chromium profile (`login.py`) so you can bypass restricted form locks seamlessly.
 - **Robust Student Auto-Fill**: Intelligently detects and clicks matching **Radio buttons, Checkboxes, and Textboxes** for Name, Roll Number, Branch, Section, and Email fields, tagging them so the AI never hallucinates over them.

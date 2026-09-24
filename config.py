@@ -12,12 +12,6 @@ from pathlib import Path
 
 load_dotenv()
 
-# Validate API Keys
-if not os.getenv("GROQ_API_KEY"):
-    raise ValueError("Missing GROQ_API_KEY in .env file.")
-if not os.getenv("GEMINI_API_KEYS"):
-    raise ValueError("Missing GEMINI_API_KEYS in .env file.")
-
 # ════════════════════════════════════════════════════════════════
 #  LLM API KEYS
 # ════════════════════════════════════════════════════════════════

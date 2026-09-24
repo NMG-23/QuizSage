@@ -124,6 +124,8 @@ class _GeminiKeyPool:
         self._idx = 0
 
     def next_key(self) -> str:
+        if not self._keys:
+            raise ValueError("Missing GEMINI_API_KEYS in .env file.")
         key = self._keys[self._idx % len(self._keys)]
         self._idx += 1
         return key
@@ -138,6 +140,9 @@ _gemini_pool = _GeminiKeyPool()
 def _call_groq(prompt: str, model_override: str | None = None) -> str:
     """Send a text-only prompt to Groq and return the raw response."""
     from groq import Groq  # lazy import to avoid load-time crash
+
+    if not config.GROQ_API_KEY:
+        raise ValueError("Missing GROQ_API_KEY in .env file.")
 
     client = Groq(api_key=config.GROQ_API_KEY)
     chat = client.chat.completions.create(
