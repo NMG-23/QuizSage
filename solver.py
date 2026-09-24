@@ -153,32 +153,32 @@ def _call_groq(prompt: str, model_override: str | None = None) -> str:
 
 
 def _call_gemini(
-    prompt: str,
-    image_parts: list[dict] | None = None,
+    contents_list: list,
 ) -> str:
     """
     Send a (possibly multimodal) prompt to Gemini using the next
     key in the round-robin pool.
 
-    ``image_parts`` is a list of dicts like:
+    ``contents_list`` is a list of strings or dicts like:
         {"mime_type": "image/png", "data": <base64-str>}
     """
     from google import genai  # lazy import
     from google.genai import types
+    import base64
 
     api_key = _gemini_pool.next_key()
     client = genai.Client(api_key=api_key)
 
     # Build the content parts list.
-    contents = [prompt]
-    if image_parts:
-        for img in image_parts:
-            # We received base64 encoded strings, so decode them for the new SDK
-            import base64
+    contents = []
+    for item in contents_list:
+        if isinstance(item, str):
+            contents.append(item)
+        else:
             contents.append(
                 types.Part.from_bytes(
-                    data=base64.b64decode(img["data"]),
-                    mime_type=img["mime_type"]
+                    data=base64.b64decode(item["data"]),
+                    mime_type=item["mime_type"]
                 )
             )
 
@@ -297,25 +297,21 @@ def solve_questions(
         gemini_qs.extend(text_qs)
 
     if gemini_qs:
-        prompt = "Solve the following questions:\n\n"
-        prompt += "\n\n".join(_build_question_block(q) for q in gemini_qs)
-
-        # Collect image parts.
-        img_parts: list[dict] = []
+        contents_list = ["Solve the following questions:\n\n"]
         for q in gemini_qs:
+            # Add text
+            contents_list.append(_build_question_block(q))
+            # Add image immediately after text if present
             if q.image_bytes:
                 b64 = base64.b64encode(q.image_bytes).decode()
-                img_parts.append({
+                contents_list.append({
                     "mime_type": "image/png",
                     "data": b64,
                 })
-                prompt += (
-                    f"\n\n[Attached image for Question {q.index} follows "
-                    f"as inline_data]"
-                )
+            contents_list.append("\n\n")
 
         try:
-            raw = _call_gemini(prompt, img_parts if img_parts else None)
+            raw = _call_gemini(contents_list)
             batch = _parse_llm_json(raw)
             results.extend(batch.answers)
             print(f"  ✅ Gemini solved {len(batch.answers)} question(s)")

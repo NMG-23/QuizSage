@@ -166,7 +166,7 @@ def _run_solve_pipeline(
         if parsed.netloc.lower() in SHORT_DOMAINS:
             print(f"Resolving short link: {url}")
             try:
-                resp = httpx.head(url, follow_redirects=True, timeout=10)
+                resp = httpx.get(url, follow_redirects=True, timeout=10)
                 url = str(resp.url)
                 print(f"  → {url}")
             except Exception as exc:
@@ -790,10 +790,11 @@ async def index():
 #  Entry point
 # ════════════════════════════════════════════════════════════════
 
-ui.run(
-    title="QuizSage",
-    port=8080,
-    reload=False,
-    show=True,
-    favicon="🧙",
-)
+if __name__ in {"__main__", "__mp_main__"}:
+    ui.run(
+        title="QuizSage",
+        port=8080,
+        reload=False,
+        show=True,
+        favicon="🧙",
+    )

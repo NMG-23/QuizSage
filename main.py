@@ -116,7 +116,7 @@ def _resolve_short_url(raw_url: str) -> str:
 
     console.print(f"[dim]Resolving short link: {raw_url}[/dim]")
     try:
-        resp = httpx.head(raw_url, follow_redirects=True, timeout=10)
+        resp = httpx.get(raw_url, follow_redirects=True, timeout=10)
         final = str(resp.url)
         console.print(f"[dim]  -> {final}[/dim]")
         return final
@@ -345,4 +345,10 @@ if __name__ == "__main__":
         sys.exit(1)
 
     target_url = sys.argv[1]
+    
+    # Prompt for subject context
+    context = console.input("\n[bold cyan]Enter subject context (e.g. 'DBMS', 'Physics') or press Enter to skip:[/bold cyan] ")
+    import config
+    config.SUBJECT_CONTEXT = context.strip()
+
     main(target_url)

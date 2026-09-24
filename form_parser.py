@@ -253,11 +253,6 @@ def _extract_image(container: Locator) -> Optional[bytes]:
     images = container.locator('img, div[role="img"]').all()
     for img in images:
         try:
-            # CRITICAL: Force Google Forms to load the image by scrolling to it
-            img.scroll_into_view_if_needed()
-            # Wait for the image network request to finish
-            container.page.wait_for_timeout(500)
-            
             # Skip tiny structural icons.
             box = img.bounding_box()
             if box and box["width"] > 10 and box["height"] > 10:
@@ -284,6 +279,18 @@ def parse_current_page(page: Page, start_index: int = 0) -> list[ParsedQuestion]
     list[ParsedQuestion]
     """
     questions: list[ParsedQuestion] = []
+
+    # Batch preload images to avoid O(N) wait times
+    all_images = page.locator('img, div[role="img"]').all()
+    found_image = False
+    for img in all_images:
+        try:
+            img.scroll_into_view_if_needed()
+            found_image = True
+        except Exception:
+            pass
+    if found_image:
+        page.wait_for_timeout(500)
 
     # Google wraps each question in a role="listitem" div.
     containers = page.locator('div[role="listitem"]').all()

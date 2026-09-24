@@ -8,8 +8,15 @@ behavioural flags, and timing parameters.
 from __future__ import annotations
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 
 load_dotenv()
+
+# Validate API Keys
+if not os.getenv("GROQ_API_KEY"):
+    raise ValueError("Missing GROQ_API_KEY in .env file.")
+if not os.getenv("GEMINI_API_KEYS"):
+    raise ValueError("Missing GEMINI_API_KEYS in .env file.")
 
 # ════════════════════════════════════════════════════════════════
 #  LLM API KEYS
@@ -77,7 +84,7 @@ PAGE_TRANSITION_WAIT: float = 2.0
 # ════════════════════════════════════════════════════════════════
 
 # Playwright persistent browser profile directory.
-BROWSER_PROFILE_DIR: str = "google_profile"
+BROWSER_PROFILE_DIR: str = str(Path(__file__).parent / "google_profile")
 
 # Local JSON database for duplicate tracking.
 HISTORY_FILE: str = "solved_history.json"
