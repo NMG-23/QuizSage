@@ -427,6 +427,7 @@ async def index():
             with ui.row().classes("w-full items-end gap-3"):
                 ui.upload(label="Upload forms.txt", auto_upload=True, on_upload=handle_file_upload).props('accept=".txt"')
                 preview_label = ui.label()
+                url_textarea = ui.textarea('Or paste form URLs (one per line)', placeholder="https://forms.gle/... — appended after any uploaded file's URLs").classes("flex-grow").props('outlined clearable color="purple"')
 
             # Toggles row
             with ui.row().classes("w-full items-center gap-6 mt-2 flex-wrap"):
@@ -682,6 +683,7 @@ async def index():
                 if confirmed:
                     batch_queue["items"] = [("Retry from History", raw_url)]
                     preview_label.text = "1 URLs found across 1 subjects (from History)"
+                    url_textarea.value = ""
                     # Scroll up to the top naturally
                     ui.run_javascript("window.scrollTo({top: 0, behavior: 'smooth'});")
                     await on_solve()
@@ -728,9 +730,19 @@ async def index():
     # ════════════════════════════════════════════════════════════
 
     async def on_solve():
-        items = batch_queue.get("items", [])
+        file_items = batch_queue.get("items", [])
+        pasted_items = parse_subject_file(url_textarea.value or "")
+        items = file_items + pasted_items
+        # Dedupe by URL, preserving order (file first)
+        seen = set()
+        deduped = []
+        for subj, url in items:
+            if url not in seen:
+                seen.add(url)
+                deduped.append((subj, url))
+        items = deduped
         if not items:
-            ui.notify("Upload a forms.txt first.", type="warning")
+            ui.notify("Upload a forms.txt or paste at least one form URL.", type="warning")
             return
 
         # ── Sync toggles to config ─────────────────────────────
