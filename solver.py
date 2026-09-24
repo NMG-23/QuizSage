@@ -117,10 +117,11 @@ def _build_question_block(q: ParsedQuestion) -> str:
 
 
 # ════════════════════════════════════════════════════════════════
-#  Gemini key-pool rotation
+#  API key-pool rotation
 # ════════════════════════════════════════════════════════════════
 
 gemini_pool = itertools.cycle(config.GEMINI_API_KEYS) if config.GEMINI_API_KEYS else None
+groq_pool = itertools.cycle(config.GROQ_API_KEYS) if config.GROQ_API_KEYS else None
 
 
 # ════════════════════════════════════════════════════════════════
@@ -131,10 +132,11 @@ def _call_groq(prompt: str, model_override: str | None = None) -> str:
     """Send a text-only prompt to Groq and return the raw response."""
     from groq import Groq  # lazy import to avoid load-time crash
 
-    if not config.GROQ_API_KEY:
+    if not config.GROQ_API_KEYS:
         raise ValueError("Missing GROQ_API_KEY in .env file.")
 
-    client = Groq(api_key=config.GROQ_API_KEY)
+    current_key = next(groq_pool)
+    client = Groq(api_key=current_key)
     chat = client.chat.completions.create(
         model=model_override or config.GROQ_MODEL,
         messages=[

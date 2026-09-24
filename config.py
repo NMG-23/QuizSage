@@ -18,7 +18,7 @@ load_dotenv()
 
 # Groq — used for ultra-fast pure-text question solving.
 # Model: openai/gpt-oss-120b
-GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+GROQ_API_KEYS: list[str] = [k.strip() for k in os.getenv("GROQ_API_KEY", "").split(",") if k.strip()]
 GROQ_MODEL: str = "openai/gpt-oss-120b"
 GROQ_FALLBACK_MODEL: str = "qwen/qwen3.8-27b"
 GROQ_TERTIARY_MODEL: str = "openai/gpt-oss-20b"
