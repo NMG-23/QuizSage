@@ -674,7 +674,8 @@ async def index():
                 resolve_dialog.open()
                 confirmed = await resolve_dialog
                 if confirmed:
-                    url_input.value = raw_url
+                    batch_queue["items"] = [("Retry from History", raw_url)]
+                    preview_label.text = "1 URLs found across 1 subjects (from History)"
                     # Scroll up to the top naturally
                     ui.run_javascript("window.scrollTo({top: 0, behavior: 'smooth'});")
                     await on_solve()
