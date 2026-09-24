@@ -127,12 +127,26 @@ def _check_history(url: str) -> dict | None:
     return hist.get(key)
 
 
+def parse_subject_file(content: str) -> list[tuple[str, str]]:
+    result = []
+    current_subject = "General"
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("http"):
+            result.append((current_subject, line))
+        else:
+            current_subject = line
+    return result
+
 # ════════════════════════════════════════════════════════════════
 #  Core solve workflow (runs in a worker thread)
 # ════════════════════════════════════════════════════════════════
 
 def _run_solve_pipeline(
     url: str,
+    subject: str,
     log_writer: _LogWriter,
     wait_for_user_action: threading.Event = None,
     user_decision: dict = None,
@@ -148,6 +162,8 @@ def _run_solve_pipeline(
     from playwright.sync_api import sync_playwright
     from urllib.parse import urlparse as _urlparse
     import httpx
+
+    config.SUBJECT_CONTEXT = subject
 
     old_stdout, old_stderr = sys.stdout, sys.stderr
     sys.stdout = log_writer
@@ -355,6 +371,14 @@ async def index():
     
     wait_for_user_action = threading.Event()
     user_decision = {}
+    
+    batch_queue = {"items": []}
+    
+    def handle_file_upload(e):
+        text = e.content.read().decode("utf-8")
+        batch_queue["items"] = parse_subject_file(text)
+        subjects_count = len({s for s, _ in batch_queue["items"]})
+        preview_label.text = f"{len(batch_queue['items'])} URLs found across {subjects_count} subjects"
 
     # ── HEADER ─────────────────────────────────────────────────
     with ui.header().classes("bg-[#0f0f0f] border-b border-zinc-800"):
@@ -396,7 +420,8 @@ async def index():
 
             # URL row
             with ui.row().classes("w-full items-end gap-3"):
-                url_textarea = ui.textarea('Paste Google Form URLs (one per line)').classes("flex-grow").props('outlined clearable color="purple"')
+                ui.upload(label="Upload forms.txt", auto_upload=True, on_upload=handle_file_upload).props('accept=".txt"')
+                preview_label = ui.label()
 
             # Toggles row
             with ui.row().classes("w-full items-center gap-6 mt-2 flex-wrap"):
@@ -696,22 +721,22 @@ async def index():
     # ════════════════════════════════════════════════════════════
 
     async def on_solve():
-        url_list = [u.strip() for u in url_textarea.value.split('\n') if u.strip()] if url_textarea.value else []
-        if not url_list:
-            ui.notify("Please enter at least one Google Forms URL.", type="warning")
+        items = batch_queue.get("items", [])
+        if not items:
+            ui.notify("Upload a forms.txt first.", type="warning")
             return
 
         # ── Sync toggles to config ─────────────────────────────
         config.AUTO_SUBMIT    = auto_submit_switch.value
         config.HUMAN_DELAY    = human_delay_switch.value
-        config.SUBJECT_CONTEXT = (subject_input.value or "").strip()
 
         _set_status(STATUS_RUNNING)
         solve_btn.disable()
         manual_action_container.classes(add="hidden")
         
         try:
-            for i, raw_url in enumerate(url_list):
+            for i, (subject, raw_url) in enumerate(items):
+                ui.notify(f"Processing ({i+1}/{len(items)}): {subject}", type="info")
                 # ── Duplicate pre-check ────────────────────────────────
                 prev = _check_history(raw_url)
                 if prev:
@@ -735,7 +760,7 @@ async def index():
                 results_table.rows.clear()
                 results_table.update()
                 log_box.clear()
-                log_box.push(f"Processing URL {i+1}/{len(url_list)}: {raw_url}")
+                log_box.push(f"Processing URL {i+1}/{len(items)}: {raw_url} (Subject: {subject})")
 
                 # ── Run in background thread ───────────────────────────
                 log_writer = _LogWriter(log_box)
@@ -747,7 +772,7 @@ async def index():
                     manual_action_container.classes(remove="hidden")
                     
                 all_q, all_a, final_status = await run.io_bound(
-                    _run_solve_pipeline, raw_url, log_writer,
+                    _run_solve_pipeline, raw_url, subject, log_writer,
                     wait_for_user_action, user_decision, show_manual_actions
                 )
 
@@ -780,8 +805,10 @@ async def index():
                 refresh_history()
                 manual_action_container.classes(add="hidden")
                 
-                if i < len(url_list) - 1:
+                if i < len(items) - 1:
                     await asyncio.sleep(3)
+                    
+            ui.notify("Batch processing complete!", type="positive")
 
         except Exception as exc:
             log_box.push(f"❌ Unexpected error: {exc}")
