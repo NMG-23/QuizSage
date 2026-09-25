@@ -108,6 +108,7 @@ def record_run(
     raw_url: str,
     questions_solved: int,
     status: str = "submitted",
+    score: str | None = None,
 ) -> None:
     """
     Append (or overwrite) a run entry in the history file.
@@ -127,5 +128,6 @@ def record_run(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "questions_solved": questions_solved,
         "status": status,
+        "score": score,
     }
     _save_history(history)

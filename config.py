@@ -22,6 +22,7 @@ GROQ_API_KEYS: list[str] = [k.strip() for k in os.getenv("GROQ_API_KEY", "").spl
 GROQ_MODEL: str = "openai/gpt-oss-120b"
 GROQ_FALLBACK_MODEL: str = "qwen/qwen3.8-27b"
 GROQ_TERTIARY_MODEL: str = "openai/gpt-oss-20b"
+QUOTA_WARN_GROQ: int | None = None
 
 # Gemini — used for multimodal questions (images) and as a
 # cascade failover when Groq rate-limits.
@@ -30,6 +31,7 @@ GROQ_TERTIARY_MODEL: str = "openai/gpt-oss-20b"
 # rate limits.
 GEMINI_API_KEYS: list[str] = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
 GEMINI_MODEL: str = "gemini-3.6-flash"
+QUOTA_WARN_GEMINI: int | None = None
 
 # ════════════════════════════════════════════════════════════════
 #  STUDENT INFO — used by the auto-fill feature

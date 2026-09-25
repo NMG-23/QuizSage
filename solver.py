@@ -24,11 +24,14 @@ import re
 import time
 import textwrap
 import itertools
+import hashlib
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
 import config
+import quota_tracker
+import answer_cache
 from form_parser import ParsedQuestion
 
 
@@ -52,6 +55,7 @@ class AnswerItem(BaseModel):
     short_answer_text: Optional[str] = None
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
+    from_cache: bool = False
 
 
 class AnswerBatch(BaseModel):
@@ -146,6 +150,7 @@ def _call_groq(prompt: str, model_override: str | None = None) -> str:
 
     current_key = next(groq_pool)
     client = Groq(api_key=current_key)
+    quota_tracker.record_call("groq")
     chat = client.chat.completions.create(
         model=model_override or config.GROQ_MODEL,
         messages=[
@@ -192,6 +197,7 @@ def _call_gemini(
     for attempt in range(3):
         current_key = next(gemini_pool)
         client = genai.Client(api_key=current_key)
+        quota_tracker.record_call("gemini")
         try:
             response = client.models.generate_content(
                 model=config.GEMINI_MODEL,
@@ -310,6 +316,28 @@ def solve_questions(
 
     results: list[AnswerItem] = []
 
+    # ── Step 0: Cache Check for text-only questions ─────────
+    text_misses: list[ParsedQuestion] = []
+    cached_answers: list[AnswerItem] = []
+    for q in text_qs:
+        block = _build_question_block(q)
+        ans_dict = answer_cache.get(block)
+        if ans_dict:
+            cached_answers.append(AnswerItem(
+                question_index=q.index,
+                selected_options=ans_dict.get("selected_options", []),
+                short_answer_text=ans_dict.get("short_answer_text"),
+                confidence=ans_dict.get("confidence", 1.0),
+                reasoning=ans_dict.get("reasoning", ""),
+                from_cache=True
+            ))
+            print(f"  ⚡ Cache hit for Q{q.index+1}")
+        else:
+            text_misses.append(q)
+    
+    text_qs = text_misses
+    results.extend(cached_answers)
+
     # ── Step 1: Groq for text-only questions ────────────────
     groq_failed = False
     if text_qs:
@@ -370,6 +398,14 @@ def solve_questions(
             print(f"  ✅ Gemini solved {len(batch.answers)} question(s)")
         except Exception as exc:
             print(f"  ❌ Gemini also failed ({exc})")
+
+    # ── Save fresh text answers to cache ────────────────────
+    for item in results:
+        if not getattr(item, "from_cache", False):
+            # Only cache answers for original text questions (not multimodal)
+            orig_q = next((x for x in questions if x.index == item.question_index and not x.image_bytes), None)
+            if orig_q:
+                answer_cache.set_answer(_build_question_block(orig_q), item, config.SUBJECT_CONTEXT, config.CONFIDENCE_WARN_THRESHOLD)
 
     # ── Build an index map for quick lookup ─────────────────
     # If the LLM returned duplicate indices, keep the last one.

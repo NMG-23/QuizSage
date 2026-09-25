@@ -28,12 +28,14 @@ from contextlib import redirect_stdout, redirect_stderr
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+from typing import Optional
 
 from nicegui import ui, run, app
 
 import config
 import history_manager
 import form_parser
+import quota_tracker
 from form_parser import ParsedQuestion
 from solver import solve_questions, AnswerItem, QuotaExhaustedError
 
@@ -310,13 +312,13 @@ def _run_solve_pipeline(
     wait_for_user_action: threading.Event = None,
     user_decision: dict = None,
     show_manual_actions: callable = None,
-) -> tuple[list[ParsedQuestion], list[AnswerItem], str]:
+) -> tuple[list[ParsedQuestion], list[AnswerItem], str, Optional[str], Optional[str]]:
     """
     Execute the full QuizSage pipeline.  This function is called
     inside a background thread via ``run.io_bound()`` so it never
     blocks the NiceGUI event loop.
 
-    Returns (all_questions, all_answers, final_status).
+    Returns (all_questions, all_answers, final_status, score, scraped_title).
     """
     from playwright.sync_api import sync_playwright
     from urllib.parse import urlparse as _urlparse
@@ -331,6 +333,8 @@ def _run_solve_pipeline(
     all_questions: list[ParsedQuestion] = []
     all_answers:   list[AnswerItem]     = []
     status = "completed"
+    score: str | None = None
+    scraped_title: str | None = None
 
     try:
         # ── Resolve short links ────────────────────────────────
@@ -499,6 +503,36 @@ def _run_solve_pipeline(
                 print("No Submit button found — answers filled but not submitted.")
                 status = "no_submit_btn"
 
+            if status == "submitted":
+                print("\nAttempting to extract title and score...")
+                try:
+                    title_loc = page.locator('h1').first
+                    if title_loc.count() == 0:
+                        title_loc = page.locator('div[role="heading"]').first
+                    if title_loc.count() > 0:
+                        scraped_title = title_loc.inner_text(timeout=2000).strip()
+                except Exception:
+                    scraped_title = None
+
+                try:
+                    locator = page.get_by_text("View score")
+                    if locator.count() > 0:
+                        try:
+                            with page.context.expect_page(timeout=10000) as new_page_info:
+                                locator.first.click(timeout=5000)
+                            score_page = new_page_info.value
+                        except Exception:
+                            score_page = page
+                        
+                        m = re.search(r"(\d+)\s*/\s*(\d+)", score_page.inner_text("body", timeout=5000))
+                        if m:
+                            score = f"{m.group(1)}/{m.group(2)}"
+                except Exception:
+                    score = None
+                
+                # Update history run with score
+                history_manager.record_run(url, total_solved, status, score=score)
+
             if config.AUTO_CLOSE_BROWSER and status == "submitted":
                 print("\nAuto-close enabled — closing browser context.")
             else:
@@ -518,7 +552,7 @@ def _run_solve_pipeline(
         sys.stdout = old_stdout
         sys.stderr = old_stderr
 
-    return all_questions, all_answers, status
+    return all_questions, all_answers, status, score, scraped_title
 
 
 # ════════════════════════════════════════════════════════════════
@@ -628,30 +662,41 @@ async def index():
         with ui.card().classes(
             "w-full bg-zinc-900/80 border border-zinc-800 backdrop-blur"
         ):
-            ui.label("Controls").classes(
-                "text-lg font-semibold text-zinc-300 mb-2"
-            )
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Controls").classes(
+                    "text-lg font-semibold text-zinc-300 mb-2"
+                )
+                quota_ui = ui.html().classes("mb-2").tooltip("API calls made today per provider. Resets at midnight.")
+                
+                def _update_quota_label():
+                    gemini, groq = quota_tracker.get_counts()
+                    g_color = "orange" if config.QUOTA_WARN_GEMINI and gemini >= config.QUOTA_WARN_GEMINI else "inherit"
+                    gr_color = "orange" if config.QUOTA_WARN_GROQ and groq >= config.QUOTA_WARN_GROQ else "inherit"
+                    quota_ui.content = f'<span class="text-sm text-zinc-400">API today — Gemini: <span style="color: {g_color}">{gemini}</span> &middot; Groq: <span style="color: {gr_color}">{groq}</span></span>'
+                
+                _update_quota_label()
+
             ui.separator().classes("mb-3")
 
             # URL row
             with ui.row().classes("w-full items-end gap-3"):
-                ui.upload(label="Upload queue (.txt, .csv, .xlsx)", auto_upload=True, on_upload=handle_file_upload).props('accept=".txt,.csv,.xlsx"')
+                ui.upload(label="Upload queue (.txt, .csv, .xlsx)", auto_upload=True, on_upload=handle_file_upload).props('accept=".txt,.csv,.xlsx"').tooltip("Upload .txt, .csv, or .xlsx with form URLs. Already-solved URLs are skipped automatically.")
                 preview_label = ui.label()
-                url_textarea = ui.textarea('Or paste form URLs (one per line)', placeholder="https://forms.gle/... — appended after any uploaded file's URLs").classes("flex-grow").props('outlined clearable color="purple"')
+                url_textarea = ui.textarea('Or paste form URLs (one per line)', placeholder="https://forms.gle/... — appended after any uploaded file's URLs").classes("flex-grow").props('outlined clearable color="purple"').tooltip("Paste one URL per line; these are appended after any uploaded file's URLs.")
 
             # Toggles row
             with ui.row().classes("w-full items-center gap-6 mt-2 flex-wrap"):
                 auto_submit_switch = ui.switch(
                     "Auto-Submit", value=config.AUTO_SUBMIT
-                ).classes("text-zinc-400")
+                ).classes("text-zinc-400").tooltip("When ON, each solved form is submitted automatically. When OFF, answers are filled in but the form is left open for manual review.")
 
                 auto_close_switch = ui.switch(
                     "Auto-Close Browser", value=config.AUTO_CLOSE_BROWSER
-                ).classes("text-zinc-400")
+                ).classes("text-zinc-400").tooltip("When ON, the browser window closes automatically after submission instead of staying open for review.")
 
                 human_delay_switch = ui.switch(
                     "Human Emulation Delays", value=config.HUMAN_DELAY
-                ).classes("text-zinc-400")
+                ).classes("text-zinc-400").tooltip("Adds random human-like pauses between actions to reduce bot-detection risk. Slightly slower.")
 
                 subject_input = ui.input(
                     label="Subject (fallback when file has no headings)",
@@ -659,7 +704,7 @@ async def index():
                     value=config.SUBJECT_CONTEXT,
                 ).classes("flex-grow min-w-[200px]").props(
                     'outlined dense color="purple"'
-                )
+                ).tooltip("Fallback subject label for forms that arrive without a heading (shown as General).")
 
             # Solve button
             solve_btn = ui.button(
@@ -667,7 +712,7 @@ async def index():
                 color="#7c3aed",
             ).classes(
                 "w-full mt-4 text-lg font-semibold tracking-wide py-2"
-            ).props('rounded unelevated')
+            ).props('rounded unelevated').tooltip("Start solving the queued forms one by one.")
 
         # ─── Student Profile Card ──────────────────────────────
         with ui.card().classes(
@@ -688,29 +733,29 @@ async def index():
                     "Name", value=profile.get("name", "")
                 ).classes("flex-grow min-w-[200px]").props(
                     'outlined dense color="purple"'
-                )
+                ).tooltip("Your full name, auto-filled into form fields that ask for it.")
                 roll_input = ui.input(
                     "Roll Number", value=profile.get("roll", "")
                 ).classes("flex-grow min-w-[150px]").props(
                     'outlined dense color="purple"'
-                )
+                ).tooltip("Your roll/enrollment number, auto-filled into matching form fields.")
 
             with ui.row().classes("w-full gap-4 flex-wrap mt-2"):
                 branch_input = ui.input(
                     "Branch", value=profile.get("branch", "")
                 ).classes("flex-grow min-w-[150px]").props(
                     'outlined dense color="purple"'
-                )
+                ).tooltip("Your branch or department, auto-filled into matching form fields.")
                 section_input = ui.input(
                     "Section", value=profile.get("section", "")
                 ).classes("flex-grow min-w-[150px]").props(
                     'outlined dense color="purple"'
-                )
+                ).tooltip("Your class section, auto-filled into matching form fields.")
                 email_input = ui.input(
                     "Email", value=profile.get("email", "")
                 ).classes("flex-grow min-w-[200px]").props(
                     'outlined dense color="purple"'
-                )
+                ).tooltip("Your email address, auto-filled into matching form fields.")
 
             def save_profile():
                 data = {
@@ -730,7 +775,7 @@ async def index():
             
             ui.button(
                 "💾 Save Profile", on_click=save_profile, color="#7c3aed"
-            ).classes("mt-2").props("rounded unelevated size=sm")
+            ).classes("mt-2").props("rounded unelevated size=sm").tooltip("Save your student details to disk so they persist across sessions.")
 
             # Show saved indicator if profile file exists
             if os.path.exists(PROFILE_FILE):
@@ -802,8 +847,8 @@ async def index():
                         ui.label("Submit Form?").classes("text-lg font-bold text-zinc-200")
                         ui.label("Are you sure you want to submit this form in the browser?").classes("text-sm text-zinc-400 mt-2")
                         with ui.row().classes("w-full justify-end gap-3 mt-4"):
-                            ui.button("Cancel", on_click=lambda: confirm_dialog.submit(False)).props("flat color=grey")
-                            ui.button("Yes, Submit", on_click=lambda: confirm_dialog.submit(True), color="green").props("unelevated rounded")
+                            ui.button("Cancel", on_click=lambda: confirm_dialog.submit(False)).props("flat color=grey").tooltip("Go back without submitting.")
+                            ui.button("Yes, Submit", on_click=lambda: confirm_dialog.submit(True), color="green").props("unelevated rounded").tooltip("Confirm and submit the form in the browser now.")
                     
                     confirmed = await confirm_dialog
                     if confirmed:
@@ -812,8 +857,8 @@ async def index():
                         manual_action_container.classes(add="hidden")
                         _set_status(STATUS_RUNNING)
 
-                ui.button("Discard & Close", on_click=on_discard, color="grey").props("outline rounded")
-                ui.button("Submit Form", on_click=on_submit, color="green").props("unelevated rounded")
+                ui.button("Discard & Close", on_click=on_discard, color="grey").props("outline rounded").tooltip("Throw away the filled answers and close the browser window.")
+                ui.button("Submit Form", on_click=on_submit, color="green").props("unelevated rounded").tooltip("Submit the filled answers in the browser after a confirmation prompt.")
 
         # ─── Form History ───────────────────────────────
         with ui.card().classes(
@@ -821,7 +866,7 @@ async def index():
         ):
             with ui.row().classes("w-full items-center justify-between"):
                 ui.label("Form History").classes("text-lg font-semibold text-zinc-300 mb-2")
-                ui.button(icon="refresh", on_click=lambda: refresh_history()).props("flat round size=sm color=grey")
+                ui.button(icon="refresh", on_click=lambda: refresh_history()).props("flat round size=sm color=grey").tooltip("Reload the history table from disk.")
                 
             ui.separator().classes("mb-3")
             
@@ -915,8 +960,8 @@ async def index():
         ui.label("Re-evaluate Draft?").classes("text-lg font-bold text-amber-400")
         ui.label("Are you sure you want to re-evaluate this form? Any previous draft answers will be overwritten.").classes("text-sm text-zinc-300 mt-2")
         with ui.row().classes("w-full justify-end gap-3 mt-4"):
-            ui.button("Cancel", on_click=lambda: resolve_dialog.submit(False)).props("flat color=grey")
-            ui.button("Yes, Re-solve", on_click=lambda: resolve_dialog.submit(True), color="amber").props("unelevated rounded")
+            ui.button("Cancel", on_click=lambda: resolve_dialog.submit(False)).props("flat color=grey").tooltip("Go back without re-solving.")
+            ui.button("Yes, Re-solve", on_click=lambda: resolve_dialog.submit(True), color="amber").props("unelevated rounded").tooltip("Re-queue this form and overwrite any previous draft answers.")
 
     # ════════════════════════════════════════════════════════════
     #  Duplicate-check dialog
@@ -933,11 +978,11 @@ async def index():
         with ui.row().classes("w-full justify-end gap-3 mt-4"):
             ui.button(
                 "Cancel", on_click=lambda: dup_dialog.submit(False)
-            ).props("flat color=grey")
+            ).props("flat color=grey").tooltip("Skip this form and move to the next one.")
             ui.button(
                 "Solve Anyway", on_click=lambda: dup_dialog.submit(True),
                 color="amber"
-            ).props("unelevated rounded")
+            ).props("unelevated rounded").tooltip("Proceed to solve even though this form was attempted before.")
 
     # ════════════════════════════════════════════════════════════
     #  Solve button handler
@@ -1018,7 +1063,7 @@ async def index():
                     manual_action_container.classes(remove="hidden")
 
                 try:
-                    all_q, all_a, final_status = await run.io_bound(
+                    all_q, all_a, final_status, form_score, form_scraped_title = await run.io_bound(
                         _run_solve_pipeline, raw_url, eff_subject, log_writer,
                         wait_for_user_action, user_decision, show_manual_actions
                     )
@@ -1037,6 +1082,36 @@ async def index():
                     async with _solved_lock:
                         _save_solved_url(raw_url)
                     solved_count += 1
+                    
+                    import hashlib
+                    notes_title = title or form_scraped_title or f"Untitled_Form_{hashlib.sha256(normalize_url(raw_url).encode()).hexdigest()[:8]}"
+                    
+                    def sanitize_filename(name):
+                        return re.sub(r'[<>:"/\\|?*]', '', name).strip()[:80]
+                    
+                    sanitized_subj = sanitize_filename(eff_subject)
+                    sanitized_title = sanitize_filename(notes_title)
+                    notes_dir = os.path.join("notes", sanitized_subj)
+                    os.makedirs(notes_dir, exist_ok=True)
+                    notes_path = os.path.join(notes_dir, f"{sanitized_title}.md")
+                    
+                    score_str = f'"{form_score}"' if form_score else "null"
+                    
+                    notes_content = f"---\ntitle: \"{notes_title}\"\nsubject: \"{eff_subject}\"\nsource_url: \"{raw_url}\"\ndate_solved: \"{datetime.now(timezone.utc).isoformat()}\"\nscore: {score_str}\nquestion_count: {len(all_q)}\n---\n# {notes_title}\n## Q&A\n"
+                    for q, a in zip(all_q, all_a):
+                        notes_content += f"### {q.index + 1}. {q.title} (confidence {a.confidence:.2f})\n"
+                        ans_text = " | ".join(a.selected_options) if a.selected_options else (a.short_answer_text or "—")
+                        notes_content += f"**Answer:** {ans_text}\n\n"
+                    
+                    try:
+                        with open(notes_path, "w", encoding="utf-8") as f:
+                            f.write(notes_content)
+                    except Exception as e:
+                        log_box.push(f"❌ Failed to save notes: {e}")
+                        
+                    cache_hits = sum(1 for a in all_a if getattr(a, "from_cache", False))
+                    ui.notify(f"Solved {len(all_q)} questions ({cache_hits} from cache)", type="positive")
+                    _update_quota_label()
 
                 # ── Populate audit table ───────────────────────────
                 rows = []
@@ -1072,7 +1147,7 @@ async def index():
                     await asyncio.sleep(3)
 
             if not quota_hit:
-                ui.notify("Batch processing complete!", type="positive")
+                ui.notify("Batch processing complete! Notes saved in notes/", type="positive")
 
         except Exception as exc:
             log_box.push(f"❌ Unexpected error: {exc}")
