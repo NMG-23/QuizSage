@@ -15,6 +15,7 @@ Opens a local browser dashboard at http://localhost:8080 with:
 
 from __future__ import annotations
 
+import csv
 import io
 import json
 import os
@@ -34,7 +35,7 @@ import config
 import history_manager
 import form_parser
 from form_parser import ParsedQuestion
-from solver import solve_questions, AnswerItem
+from solver import solve_questions, AnswerItem, QuotaExhaustedError
 
 
 # ════════════════════════════════════════════════════════════════
@@ -42,11 +43,27 @@ from solver import solve_questions, AnswerItem
 # ════════════════════════════════════════════════════════════════
 
 PROFILE_FILE = "student_profile.json"
+SOLVED_FILE  = "solved.json"
 
 STATUS_IDLE      = ("Idle",      "gray")
 STATUS_RUNNING   = ("Running…",  "amber")
 STATUS_COMPLETED = ("Completed", "green")
 STATUS_ERROR     = ("Error",     "red")
+
+# Asyncio lock for atomic solved.json writes (must NOT be threading.Lock —
+# on_solve() is async and runs on NiceGUI's event loop).
+_solved_lock = asyncio.Lock()
+
+
+# ════════════════════════════════════════════════════════════════
+#  Shared URL normalization
+# ════════════════════════════════════════════════════════════════
+
+def normalize_url(url: str) -> str:
+    """Canonical form: strip whitespace, query, fragment, trailing slash."""
+    if not url:
+        return ""
+    return url.strip().split("?")[0].split("#")[0].rstrip("/")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -144,6 +161,143 @@ def parse_subject_file(content: str) -> list[tuple[str, str]]:
         else:
             current_subject = line
     return result
+
+
+# ════════════════════════════════════════════════════════════════
+#  Multi-format queue file parser
+# ════════════════════════════════════════════════════════════════
+
+def _detect_column(headers: list[str], candidates: list[str], default: str | None = None) -> str | None:
+    """Case-insensitively find the first header matching any candidate."""
+    lower_headers = {h.lower().strip(): h for h in headers}
+    for c in candidates:
+        if c.lower() in lower_headers:
+            return lower_headers[c.lower()]
+    return default
+
+
+def parse_queue_file(content_bytes: bytes, filename: str) -> list[tuple[str, str, str]]:
+    """
+    Parse an uploaded file into a list of (subject, url, title) 3-tuples.
+    Supports .txt, .csv, and .xlsx formats.
+    Every URL is normalized; rows with empty/invalid URLs are skipped.
+    """
+    ext = os.path.splitext(filename)[1].lower()
+
+    if ext == ".txt":
+        text = content_bytes.decode("utf-8", errors="ignore")
+        pairs = parse_subject_file(text)  # returns (subject, url) 2-tuples
+        items = [(subj, normalize_url(url), "") for subj, url in pairs]
+        return [(s, u, t) for s, u, t in items if u]
+
+    elif ext == ".csv":
+        text = content_bytes.decode("utf-8", errors="ignore")
+        return _parse_tabular_rows_csv(text)
+
+    elif ext == ".xlsx":
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(content_bytes), read_only=True)
+        ws = wb.active
+        rows_iter = ws.iter_rows(values_only=True)
+        # First row is header
+        try:
+            header_row = next(rows_iter)
+        except StopIteration:
+            wb.close()
+            return []
+        headers = [str(h or "").strip() for h in header_row]
+        data_rows = []
+        for row in rows_iter:
+            data_rows.append({headers[i]: str(cell or "").strip() for i, cell in enumerate(row) if i < len(headers)})
+        wb.close()
+        return _parse_tabular_dicts(headers, data_rows)
+
+    return []
+
+
+def _parse_tabular_rows_csv(text: str) -> list[tuple[str, str, str]]:
+    """Parse CSV text with DictReader, applying column-detection logic."""
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        # No header — fall back to URL-regex search across all text
+        return _url_regex_fallback(text)
+    headers = list(reader.fieldnames)
+    rows = list(reader)
+    return _parse_tabular_dicts(headers, rows)
+
+
+def _parse_tabular_dicts(
+    headers: list[str], rows: list[dict]
+) -> list[tuple[str, str, str]]:
+    """Shared column-detection for CSV and XLSX tabular data."""
+    url_col     = _detect_column(headers, ["url", "form_url", "link"])
+    subject_col = _detect_column(headers, ["subject", "class"])
+    title_col   = _detect_column(headers, ["title"])
+
+    if not url_col:
+        # No recognizable URL column — fall back to URL-regex across all cells
+        all_text = "\n".join(
+            " ".join(str(v) for v in row.values()) for row in rows
+        )
+        return _url_regex_fallback(all_text)
+
+    items = []
+    for row in rows:
+        raw_url = str(row.get(url_col, "")).strip()
+        url = normalize_url(raw_url)
+        if not url or not url.startswith("http"):
+            continue
+        subject = str(row.get(subject_col, "General")).strip() if subject_col else "General"
+        title   = str(row.get(title_col, "")).strip() if title_col else ""
+        items.append((subject, url, title))
+    return items
+
+
+def _url_regex_fallback(text: str) -> list[tuple[str, str, str]]:
+    """Extract URLs via _URL_RE when column headers are unrecognizable."""
+    items = []
+    for m in _URL_RE.finditer(text):
+        raw = m.group(0).rstrip(".,;:)]}")
+        url = normalize_url(raw)
+        if url:
+            items.append(("General", url, ""))
+    return items
+
+
+# ════════════════════════════════════════════════════════════════
+#  solved.json helpers
+# ════════════════════════════════════════════════════════════════
+
+def _load_solved() -> set[str]:
+    """Load solved.json defensively — missing or corrupt = empty set."""
+    if not os.path.exists(SOLVED_FILE):
+        return set()
+    try:
+        with open(SOLVED_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return set(data.get("solved_urls", []))
+    except (json.JSONDecodeError, OSError, TypeError):
+        return set()
+
+
+def _save_solved_url(url: str) -> None:
+    """
+    Atomically append a normalized URL to solved.json.
+    Write to solved.json.tmp then os.replace() over solved.json.
+    """
+    solved = _load_solved()
+    norm = normalize_url(url)
+    if norm in solved:
+        return
+    solved.add(norm)
+    data = {
+        "solved_urls": sorted(solved),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    tmp = SOLVED_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, ensure_ascii=False)
+    os.replace(tmp, SOLVED_FILE)
 
 # ════════════════════════════════════════════════════════════════
 #  Core solve workflow (runs in a worker thread)
@@ -399,12 +553,47 @@ async def index():
     user_decision = {}
     
     batch_queue = {"items": []}
-    
+
+    def _update_preview():
+        """Refresh the preview label to reflect current batch_queue state."""
+        items = batch_queue["items"]
+        subjects_count = len({s for s, _u, _t in items})
+        preview_label.text = f"{len(items)} URLs across {subjects_count} subjects"
+
     def handle_file_upload(e):
-        text = e.content.read().decode("utf-8")
-        batch_queue["items"] = parse_subject_file(text)
-        subjects_count = len({s for s, _ in batch_queue["items"]})
-        preview_label.text = f"{len(batch_queue['items'])} URLs found across {subjects_count} subjects"
+        content_bytes = e.content.read()
+        filename = e.name if hasattr(e, 'name') else 'upload.txt'
+        items = parse_queue_file(content_bytes, filename)
+
+        # ── Skip already-solved URLs ────────────────────────────
+        solved = _load_solved()
+        before = len(items)
+        items = [(s, u, t) for s, u, t in items if normalize_url(u) not in solved]
+        skipped = before - len(items)
+        if skipped:
+            ui.notify(f"Skipped {skipped} already-solved URLs.", type="info")
+
+        # ── Deduplicate by URL (keep first) ─────────────────────
+        seen: set[str] = set()
+        deduped: list[tuple[str, str, str]] = []
+        for s, u, t in items:
+            norm = normalize_url(u)
+            if norm not in seen:
+                seen.add(norm)
+                deduped.append((s, u, t))
+        removed = len(items) - len(deduped)
+        if removed:
+            ui.notify(f"Removed {removed} duplicate URLs.", type="info")
+        items = deduped
+
+        if not items:
+            ui.notify("No new URLs after filtering. Upload aborted.", type="warning")
+            batch_queue["items"] = []
+            preview_label.text = ""
+            return
+
+        batch_queue["items"] = items
+        _update_preview()
 
     # ── HEADER ─────────────────────────────────────────────────
     with ui.header().classes("bg-[#0f0f0f] border-b border-zinc-800"):
@@ -446,7 +635,7 @@ async def index():
 
             # URL row
             with ui.row().classes("w-full items-end gap-3"):
-                ui.upload(label="Upload forms.txt", auto_upload=True, on_upload=handle_file_upload).props('accept=".txt"')
+                ui.upload(label="Upload queue (.txt, .csv, .xlsx)", auto_upload=True, on_upload=handle_file_upload).props('accept=".txt,.csv,.xlsx"')
                 preview_label = ui.label()
                 url_textarea = ui.textarea('Or paste form URLs (one per line)', placeholder="https://forms.gle/... — appended after any uploaded file's URLs").classes("flex-grow").props('outlined clearable color="purple"')
 
@@ -706,8 +895,8 @@ async def index():
                 resolve_dialog.open()
                 confirmed = await resolve_dialog
                 if confirmed:
-                    batch_queue["items"] = [("Retry from History", raw_url)]
-                    preview_label.text = "1 URLs found across 1 subjects (from History)"
+                    batch_queue["items"] = [("Retry from History", raw_url, "")]
+                    preview_label.text = "1 URLs across 1 subjects (from History)"
                     url_textarea.value = ""
                     # Scroll up to the top naturally
                     ui.run_javascript("window.scrollTo({top: 0, behavior: 'smooth'});")
@@ -756,18 +945,23 @@ async def index():
 
     async def on_solve():
         file_items = batch_queue.get("items", [])
-        pasted_items = parse_subject_file(url_textarea.value or "")
-        items = file_items + pasted_items
-        # Dedupe by URL, preserving order (file first)
-        seen = set()
-        deduped = []
-        for subj, url in items:
-            if url not in seen:
-                seen.add(url)
-                deduped.append((subj, url))
+        # Pasted URLs → parse as .txt, producing 2-tuples; widen to 3-tuples
+        pasted_pairs = parse_subject_file(url_textarea.value or "")
+        pasted_items = [(s, u, "") for s, u in pasted_pairs]
+        items = list(file_items) + pasted_items
+        # Ensure every item is a 3-tuple
+        items = [(s, u, t) for s, u, t in items]
+        # Dedupe by normalized URL, preserving order (file first)
+        seen: set[str] = set()
+        deduped: list[tuple[str, str, str]] = []
+        for subj, url, title in items:
+            norm = normalize_url(url)
+            if norm and norm not in seen:
+                seen.add(norm)
+                deduped.append((subj, url, title))
         items = deduped
         if not items:
-            ui.notify("Upload a forms.txt or paste at least one form URL.", type="warning")
+            ui.notify("Upload a queue file or paste at least one form URL.", type="warning")
             return
 
         # ── Sync toggles to config ─────────────────────────────
@@ -785,10 +979,14 @@ async def index():
         results_table.update()
         log_box.clear()
 
+        solved_count = 0
+        total_count = len(items)
+        quota_hit = False
+
         try:
-            for i, (subject, raw_url) in enumerate(items):
+            for i, (subject, raw_url, title) in enumerate(items):
                 eff_subject = subject if subject != "General" else manual_subject
-                ui.notify(f"Processing ({i+1}/{len(items)}): {eff_subject}", type="info")
+                ui.notify(f"Processing ({i+1}/{total_count}): {eff_subject}", type="info")
                 # ── Duplicate pre-check ────────────────────────────────
                 prev = _check_history(raw_url)
                 if prev:
@@ -808,21 +1006,37 @@ async def index():
                         ui.notify(f"Aborted {raw_url}.", type="info")
                         continue
 
-                log_box.push(f"Processing URL {i+1}/{len(items)}: {raw_url} (Subject: {eff_subject})")
+                log_box.push(f"Processing URL {i+1}/{total_count}: {raw_url} (Subject: {eff_subject})")
 
                 # ── Run in background thread ───────────────────────────
                 log_writer = _LogWriter(log_box)
 
                 wait_for_user_action.clear()
                 user_decision.clear()
-                
+
                 def show_manual_actions():
                     manual_action_container.classes(remove="hidden")
-                    
-                all_q, all_a, final_status = await run.io_bound(
-                    _run_solve_pipeline, raw_url, eff_subject, log_writer,
-                    wait_for_user_action, user_decision, show_manual_actions
-                )
+
+                try:
+                    all_q, all_a, final_status = await run.io_bound(
+                        _run_solve_pipeline, raw_url, eff_subject, log_writer,
+                        wait_for_user_action, user_decision, show_manual_actions
+                    )
+                except QuotaExhaustedError:
+                    quota_hit = True
+                    ui.notify(
+                        f"Stopped: API quota exhausted — solved {solved_count} of {total_count}. Re-run later to continue.",
+                        type="negative",
+                        timeout=10000,
+                    )
+                    log_box.push(f"⛔ API quota exhausted after solving {solved_count}/{total_count}. Stopping batch.")
+                    break
+
+                # ── Save solved.json immediately on confirmed success ──
+                if final_status == "submitted":
+                    async with _solved_lock:
+                        _save_solved_url(raw_url)
+                    solved_count += 1
 
                 # ── Populate audit table ───────────────────────────
                 rows = []
@@ -850,19 +1064,27 @@ async def index():
                     _set_status(STATUS_ERROR)
                 else:
                     _set_status(STATUS_COMPLETED)
-                    
+
                 refresh_history()
                 manual_action_container.classes(add="hidden")
-                
-                if i < len(items) - 1:
+
+                if i < total_count - 1:
                     await asyncio.sleep(3)
-                    
-            ui.notify("Batch processing complete!", type="positive")
+
+            if not quota_hit:
+                ui.notify("Batch processing complete!", type="positive")
 
         except Exception as exc:
             log_box.push(f"❌ Unexpected error: {exc}")
             _set_status(STATUS_ERROR)
         finally:
+            # ── Step 6: Prune in-memory queue against solved.json ──
+            solved = _load_solved()
+            batch_queue["items"] = [
+                (s, u, t) for s, u, t in batch_queue.get("items", [])
+                if normalize_url(u) not in solved
+            ]
+            _update_preview()
             solve_btn.enable()
 
     solve_btn.on_click(on_solve)

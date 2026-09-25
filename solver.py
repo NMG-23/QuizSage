@@ -33,6 +33,15 @@ from form_parser import ParsedQuestion
 
 
 # ════════════════════════════════════════════════════════════════
+#  Quota exhaustion sentinel
+# ════════════════════════════════════════════════════════════════
+
+class QuotaExhaustedError(Exception):
+    """Raised when the API quota is fatally exhausted (not a transient 429)."""
+    pass
+
+
+# ════════════════════════════════════════════════════════════════
 #  Pydantic schema
 # ════════════════════════════════════════════════════════════════
 
@@ -204,6 +213,9 @@ def _call_gemini(
                 continue
             raise
     if last_err:
+        err_msg = str(last_err)
+        if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
+            raise QuotaExhaustedError(f"API quota exhausted after full retry sequence: {err_msg[:120]}") from last_err
         raise last_err
     raise RuntimeError("Failed to call Gemini")
 

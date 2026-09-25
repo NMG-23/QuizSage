@@ -19,3 +19,6 @@ rich
 nicegui
 python-dotenv
 httpx
+
+# Excel file parsing
+openpyxl
