@@ -48,11 +48,11 @@ STUDENT_SECTION: str = "Section A"
 # If True, the bot will click "Submit" automatically after the
 # audit table is printed. If False, it pauses for human review.
 AUTO_SUBMIT: bool = False
-AUTO_CLOSE_BROWSER: bool = True
+AUTO_CLOSE_BROWSER: bool = False
 
 # If True, random human-like delays are injected between UI
 # actions.  Disable for faster (but less stealthy) runs.
-HUMAN_DELAY: bool = True
+HUMAN_DELAY: bool = False
 
 # Confidence threshold (0.0-1.0).  Answers below this get a ⚠️
 # flag in the audit table to draw your attention.
