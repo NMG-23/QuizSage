@@ -4,8 +4,9 @@ import hashlib
 import re
 import threading
 from datetime import datetime, timezone
+import settings
 
-CACHE_FILE = "answer_cache.json"
+CACHE_FILE = str(settings.get_data_dir() / "answer_cache.json")
 _cache_lock = threading.Lock()
 
 # Regex to remove [Question X] block headers and leading numbering

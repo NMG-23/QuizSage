@@ -23,6 +23,7 @@ import time
 import threading
 import asyncio
 import re
+import subprocess
 from contextlib import redirect_stdout, redirect_stderr
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,7 @@ from typing import Optional
 
 from nicegui import ui, run, app
 
+import settings
 import config
 import history_manager
 import form_parser
@@ -44,8 +46,7 @@ from solver import solve_questions, AnswerItem, QuotaExhaustedError
 #  Constants
 # ════════════════════════════════════════════════════════════════
 
-PROFILE_FILE = "student_profile.json"
-SOLVED_FILE  = "solved.json"
+SOLVED_FILE = str(settings.get_data_dir() / "solved.json")
 
 STATUS_IDLE      = ("Idle",      "gray")
 STATUS_RUNNING   = ("Running…",  "amber")
@@ -68,43 +69,6 @@ def normalize_url(url: str) -> str:
     return url.strip().split("?")[0].split("#")[0].rstrip("/")
 
 
-# ════════════════════════════════════════════════════════════════
-#  Student profile persistence
-# ════════════════════════════════════════════════════════════════
-
-def _load_profile() -> dict:
-    """Load student_profile.json if it exists, else return defaults."""
-    if os.path.exists(PROFILE_FILE):
-        try:
-            with open(PROFILE_FILE, "r", encoding="utf-8") as fh:
-                return json.load(fh)
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {
-        "name": config.STUDENT_NAME,
-        "roll": config.STUDENT_ROLL,
-        "branch": getattr(config, "STUDENT_BRANCH", ""),
-        "section": getattr(config, "STUDENT_SECTION", ""),
-        "email": config.STUDENT_EMAIL,
-    }
-
-
-def _save_profile(data: dict) -> None:
-    """Persist student identity to disk."""
-    with open(PROFILE_FILE, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2, ensure_ascii=False)
-
-
-def _apply_profile_to_config(data: dict) -> None:
-    """Push saved profile values into the live config module."""
-    config.STUDENT_NAME   = data.get("name",    config.STUDENT_NAME)
-    config.STUDENT_ROLL   = data.get("roll",    config.STUDENT_ROLL)
-    config.STUDENT_BRANCH = data.get("branch", getattr(config, "STUDENT_BRANCH", ""))
-    config.STUDENT_SECTION = data.get("section", getattr(config, "STUDENT_SECTION", ""))
-    config.STUDENT_EMAIL  = data.get("email",   config.STUDENT_EMAIL)
-
-    # Clear the lazily-cached info map so form_parser picks up new values.
-    form_parser._INFO_MAP.clear()
 
 
 # ════════════════════════════════════════════════════════════════
@@ -559,9 +523,7 @@ def _run_solve_pipeline(
 #  UI construction
 # ════════════════════════════════════════════════════════════════
 
-# Load profile once at import time so defaults are ready.
-_initial_profile = _load_profile()
-_apply_profile_to_config(_initial_profile)
+
 
 
 @ui.page("/")
@@ -569,7 +531,16 @@ async def index():
     """Build the entire QuizSage dashboard."""
 
     # ── Page-level dark mode & custom CSS ──────────────────────
-    ui.dark_mode().enable()
+    s, _ = settings.load_settings()
+    appr = s.get("appearance", {})
+    if appr.get("dark_mode", True):
+        ui.dark_mode().enable()
+    else:
+        ui.dark_mode().disable()
+    ui.colors(primary=appr.get("primary", "#7c3aed"), 
+              secondary=appr.get("secondary", "#26A69A"), 
+              accent=appr.get("accent", "#9C27B0"))
+              
     ui.add_head_html("""
     <style>
         body { font-family: 'Inter', 'Segoe UI', sans-serif; }
@@ -735,72 +706,7 @@ async def index():
                 "w-full mt-4 text-lg font-semibold tracking-wide py-2"
             ).props('rounded unelevated').tooltip("Start solving the queued forms one by one.")
 
-        # ─── Student Profile Card ──────────────────────────────
-        with ui.card().classes(
-            "w-full bg-zinc-900/80 border border-zinc-800 backdrop-blur"
-        ):
-            with ui.row().classes("w-full items-center justify-between"):
-                ui.label("Student Profile").classes(
-                    "text-lg font-semibold text-zinc-300"
-                )
-                profile_status = ui.label("").classes("text-sm text-green-400")
 
-            ui.separator().classes("my-2")
-
-            profile = _load_profile()
-
-            with ui.row().classes("w-full gap-4 flex-wrap"):
-                name_input = ui.input(
-                    "Name", value=profile.get("name", "")
-                ).classes("flex-grow min-w-[200px]").props(
-                    'outlined dense color="purple"'
-                ).tooltip("Your full name, auto-filled into form fields that ask for it.")
-                roll_input = ui.input(
-                    "Roll Number", value=profile.get("roll", "")
-                ).classes("flex-grow min-w-[150px]").props(
-                    'outlined dense color="purple"'
-                ).tooltip("Your roll/enrollment number, auto-filled into matching form fields.")
-
-            with ui.row().classes("w-full gap-4 flex-wrap mt-2"):
-                branch_input = ui.input(
-                    "Branch", value=profile.get("branch", "")
-                ).classes("flex-grow min-w-[150px]").props(
-                    'outlined dense color="purple"'
-                ).tooltip("Your branch or department, auto-filled into matching form fields.")
-                section_input = ui.input(
-                    "Section", value=profile.get("section", "")
-                ).classes("flex-grow min-w-[150px]").props(
-                    'outlined dense color="purple"'
-                ).tooltip("Your class section, auto-filled into matching form fields.")
-                email_input = ui.input(
-                    "Email", value=profile.get("email", "")
-                ).classes("flex-grow min-w-[200px]").props(
-                    'outlined dense color="purple"'
-                ).tooltip("Your email address, auto-filled into matching form fields.")
-
-            def save_profile():
-                data = {
-                    "name":    name_input.value.strip(),
-                    "roll":    roll_input.value.strip(),
-                    "branch":  branch_input.value.strip(),
-                    "section": section_input.value.strip(),
-                    "email":   email_input.value.strip(),
-                }
-                _save_profile(data)
-                _apply_profile_to_config(data)
-                profile_status.text = "✓ Saved"
-                ui.notify("Profile saved!", type="positive", position="bottom")
-
-            # Forward declaration so history table can trigger solving
-            async def on_solve(): pass 
-            
-            ui.button(
-                "💾 Save Profile", on_click=save_profile, color="#7c3aed"
-            ).classes("mt-2").props("rounded unelevated size=sm").tooltip("Save your student details to disk so they persist across sessions.")
-
-            # Show saved indicator if profile file exists
-            if os.path.exists(PROFILE_FILE):
-                profile_status.text = "✓ Loaded from disk"
 
         # ─── Live Log Terminal ─────────────────────────────────
         with ui.card().classes(
@@ -939,7 +845,220 @@ async def index():
             # Initial load
             refresh_history()
 
+        # ─── Settings ───────────────────────────────────────────────
+        with ui.card().classes("w-full bg-zinc-900/80 border border-zinc-800 backdrop-blur"):
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Settings").classes("text-lg font-semibold text-zinc-300")
+                ui.button("💾 Save Settings", on_click=lambda: save_all_settings(), color="#7c3aed").props("rounded unelevated size=sm").tooltip("Save settings and apply them instantly.")
+            ui.separator().classes("my-2")
+            
+            s, _ = settings.load_settings()
+            
+            with ui.expansion('API Keys', icon='key').classes('w-full bg-zinc-950'):
+                ui.add_head_html('<style>.password-mask textarea { -webkit-text-security: disc; }</style>')
+                def toggle_mask(ta):
+                    if 'password-mask' in ta.classes:
+                        ta.classes(remove='password-mask')
+                    else:
+                        ta.classes(add='password-mask')
+
+                with ui.row().classes('w-full items-start gap-2'):
+                    groq_keys_ta = ui.textarea('Groq Keys', value='\n'.join(s.get("keys", {}).get("groq", []))).classes('flex-grow password-mask').props('outlined').tooltip("Get a Groq API key from console.groq.com. One key per line.")
+                    ui.button(icon='visibility', on_click=lambda ta=groq_keys_ta: toggle_mask(ta)).props('flat round size=sm').classes("mt-2")
+                with ui.row().classes('w-full items-start gap-2'):
+                    gemini_keys_ta = ui.textarea('Gemini Keys', value='\n'.join(s.get("keys", {}).get("gemini", []))).classes('flex-grow password-mask').props('outlined').tooltip("Get a Gemini API key from aistudio.google.com. One key per line.")
+                    ui.button(icon='visibility', on_click=lambda ta=gemini_keys_ta: toggle_mask(ta)).props('flat round size=sm').classes("mt-2")
+                with ui.row().classes('w-full items-start gap-2'):
+                    openrouter_keys_ta = ui.textarea('OpenRouter Keys', value='\n'.join(s.get("keys", {}).get("openrouter", []))).classes('flex-grow password-mask').props('outlined').tooltip("Get an OpenRouter API key from openrouter.ai. One key per line.")
+                    ui.button(icon='visibility', on_click=lambda ta=openrouter_keys_ta: toggle_mask(ta)).props('flat round size=sm').classes("mt-2")
+            
+            with ui.expansion('Models', icon='smart_toy').classes('w-full bg-zinc-950'):
+                m = s.get("models", {})
+                with ui.row().classes("w-full gap-4 flex-wrap"):
+                    groq_prim_in = ui.input("Groq Primary", value=m.get("groq_primary", "")).classes("flex-grow").props('outlined dense color="purple"').tooltip("Main Groq model (e.g. openai/gpt-oss-120b)")
+                    groq_fall_in = ui.input("Groq Fallback", value=m.get("groq_fallback", "")).classes("flex-grow").props('outlined dense color="purple"').tooltip("Secondary Groq model if primary fails")
+                    groq_tert_in = ui.input("Groq Tertiary", value=m.get("groq_tertiary", "")).classes("flex-grow").props('outlined dense color="purple"').tooltip("Tertiary Groq model if fallback fails")
+                with ui.row().classes("w-full gap-4 flex-wrap mt-2"):
+                    gemini_mod_in = ui.input("Gemini Model", value=m.get("gemini", "")).classes("flex-grow").props('outlined dense color="purple"').tooltip("Model used for Gemini cascade and multimodal")
+                    openrouter_mod_in = ui.input("OpenRouter Model", value=m.get("openrouter", "")).classes("flex-grow").props('outlined dense color="purple"').tooltip("Model used for OpenRouter provider")
+            
+            with ui.expansion('Custom Providers', icon='extension').classes('w-full bg-zinc-950'):
+                custom_providers_container = ui.column().classes('w-full gap-4')
+                custom_provider_uis = []
+                
+                def add_provider_row(p_data=None):
+                    if p_data is None: p_data = {"name": "", "base_url": "", "model": "", "keys": []}
+                    with custom_providers_container:
+                        with ui.card().classes('w-full bg-zinc-900 border border-zinc-700'):
+                            with ui.row().classes('w-full gap-4 flex-wrap'):
+                                n_in = ui.input("Name", value=p_data.get("name", "")).classes("flex-grow").props('outlined dense color="purple"').tooltip("Slugified internally (e.g. Ollama)")
+                                b_in = ui.input("Base URL", value=p_data.get("base_url", "")).classes("flex-grow").props('outlined dense color="purple"').tooltip("OpenAI-compatible base URL")
+                                m_in = ui.input("Model", value=p_data.get("model", "")).classes("flex-grow").props('outlined dense color="purple"').tooltip("Model name string")
+                            with ui.row().classes('w-full items-start gap-2 mt-2'):
+                                k_in = ui.textarea('Keys (one per line)', value='\n'.join(p_data.get("keys", []))).classes('flex-grow password-mask').props('outlined').tooltip("API keys for this provider")
+                                ui.button(icon='visibility', on_click=lambda x=k_in: toggle_mask(x)).props('flat round size=sm').classes("mt-2")
+                            
+                            def remove_me(r_ui):
+                                custom_provider_uis.remove(r_ui)
+                                r_ui["container"].delete()
+                            
+                            r_btn = ui.button("Remove Provider", color="red").props('flat size=sm').classes('mt-2')
+                            
+                            row_dict = {"n": n_in, "b": b_in, "m": m_in, "k": k_in, "container": custom_providers_container.default_slot.children[-1]}
+                            r_btn.on_click(lambda x=row_dict: remove_me(x))
+                            custom_provider_uis.append(row_dict)
+                
+                for p in s.get("custom_providers", []):
+                    add_provider_row(p)
+                ui.button("Add Provider", icon="add", on_click=lambda: add_provider_row(), color="grey").props('outline size=sm').classes('mt-2')
+            
+            with ui.expansion('Behaviour', icon='settings').classes('w-full bg-zinc-950'):
+                b = s.get("behaviour", {})
+                with ui.row().classes("w-full gap-4 flex-wrap items-center"):
+                    b_auto_sub = ui.switch("Auto-Submit (Default)", value=b.get("auto_submit", False)).tooltip("Default for Auto-Submit toggle")
+                    b_auto_close = ui.switch("Auto-Close Browser (Default)", value=b.get("auto_close_browser", False)).tooltip("Default for Auto-Close toggle")
+                    b_human = ui.switch("Human Delays (Default)", value=b.get("human_delay", False)).tooltip("Default for Human Delays toggle")
+                with ui.row().classes("w-full gap-4 flex-wrap mt-2"):
+                    b_conf = ui.number("Confidence Warn Threshold", value=b.get("confidence_warn_threshold", 0.70), step=0.01).classes("w-32").props('outlined dense color="purple"').tooltip("Below this, answers are flagged")
+                    b_subj = ui.input("Subject Context", value=b.get("subject_context", "")).classes("flex-grow").props('outlined dense color="purple"').tooltip("Default subject context")
+                with ui.row().classes("w-full gap-4 flex-wrap mt-2"):
+                    b_min_delay = ui.number("Min Delay", value=b.get("min_action_delay", 0.30), step=0.1).classes("w-24").props('outlined dense color="purple"').tooltip("Minimum human action delay (s)")
+                    b_max_delay = ui.number("Max Delay", value=b.get("max_action_delay", 1.50), step=0.1).classes("w-24").props('outlined dense color="purple"').tooltip("Maximum human action delay (s)")
+                    b_page_wait = ui.number("Page Wait", value=b.get("page_transition_wait", 2.0), step=0.1).classes("w-24").props('outlined dense color="purple"').tooltip("Wait for Google slide transitions (s)")
+                with ui.row().classes("w-full gap-4 flex-wrap mt-2"):
+                    b_warn_groq = ui.number("Quota Warn Groq", value=b.get("quota_warn_groq")).classes("w-32").props('outlined dense color="purple" clearable').tooltip("Warn when daily Groq calls exceed this")
+                    b_warn_gemini = ui.number("Quota Warn Gemini", value=b.get("quota_warn_gemini")).classes("w-32").props('outlined dense color="purple" clearable').tooltip("Warn when daily Gemini calls exceed this")
+
+            with ui.expansion('Student Info', icon='person').classes('w-full bg-zinc-950'):
+                stu = s.get("student", {})
+                with ui.row().classes("w-full gap-4 flex-wrap"):
+                    stu_name = ui.input("Name", value=stu.get("name", "")).classes("flex-grow min-w-[200px]").props('outlined dense color="purple"').tooltip("Auto-fill Name")
+                    stu_roll = ui.input("Roll Number", value=stu.get("roll", "")).classes("flex-grow min-w-[150px]").props('outlined dense color="purple"').tooltip("Auto-fill Roll Number")
+                with ui.row().classes("w-full gap-4 flex-wrap mt-2"):
+                    stu_branch = ui.input("Branch", value=stu.get("branch", "")).classes("flex-grow min-w-[150px]").props('outlined dense color="purple"').tooltip("Auto-fill Branch")
+                    stu_section = ui.input("Section", value=stu.get("section", "")).classes("flex-grow min-w-[150px]").props('outlined dense color="purple"').tooltip("Auto-fill Section")
+                    stu_email = ui.input("Email", value=stu.get("email", "")).classes("flex-grow min-w-[200px]").props('outlined dense color="purple"').tooltip("Auto-fill Email")
+            
+            with ui.expansion('Appearance & Launch', icon='palette').classes('w-full bg-zinc-950'):
+                appr = s.get("appearance", {})
+                ln = s.get("launch", {})
+                with ui.row().classes("w-full gap-4 items-center"):
+                    a_dark = ui.switch("Dark Mode", value=appr.get("dark_mode", True)).tooltip("Toggle dark mode")
+                    def apply_theme(*args):
+                        if a_dark.value: ui.dark_mode().enable()
+                        else: ui.dark_mode().disable()
+                        ui.colors(primary=a_prim.value, secondary=a_sec.value, accent=a_acc.value)
+                    a_dark.on_value_change(apply_theme)
+                    
+                    a_prim = ui.color_input("Primary", value=appr.get("primary", "#7c3aed")).props('outlined dense').tooltip("Primary Theme Color").on_value_change(apply_theme)
+                    a_sec = ui.color_input("Secondary", value=appr.get("secondary", "#26A69A")).props('outlined dense').tooltip("Secondary Theme Color").on_value_change(apply_theme)
+                    a_acc = ui.color_input("Accent", value=appr.get("accent", "#9C27B0")).props('outlined dense').tooltip("Accent Theme Color").on_value_change(apply_theme)
+                
+                ui.separator().classes("my-2")
+                l_native = ui.switch("Open as desktop window (native)", value=ln.get("native_window", False)).tooltip("Applies on next launch. Uses a native desktop window instead of a browser tab.")
+                
+            with ui.expansion('Data', icon='folder').classes('w-full bg-zinc-950'):
+                ui.label(str(settings.get_data_dir())).classes("text-sm font-mono text-zinc-400 mb-2").tooltip("Local Data Directory")
+                with ui.row().classes("gap-4"):
+                    def open_data_folder():
+                        import subprocess
+                        path = str(settings.get_data_dir())
+                        if hasattr(os, "startfile"):
+                            os.startfile(path)
+                        else:
+                            opener = "open" if sys.platform == "darwin" else "xdg-open"
+                            subprocess.Popen([opener, path])
+                    ui.button("Open data folder", on_click=open_data_folder).props("outline size=sm color=grey").tooltip("Open the folder containing your QuizSage data in your file explorer.")
+                    
+                    # Dialog for delete data
+                    with ui.dialog() as del_dialog, ui.card().classes("bg-zinc-900 border border-zinc-700"):
+                        ui.label("Delete all local data?").classes("text-lg font-bold text-red-500")
+                        del_check = ui.checkbox("Also delete settings and API keys")
+                        with ui.row().classes("w-full justify-end gap-3 mt-4"):
+                            ui.button("Cancel", on_click=lambda: del_dialog.submit(False)).props("flat color=grey")
+                            ui.button("Delete", on_click=lambda: del_dialog.submit((True, del_check.value)), color="red").props("unelevated rounded")
+                    
+                    async def prompt_delete():
+                        res = await del_dialog
+                        if not res: return
+                        _, inc_settings = res
+                        data_dir = settings.get_data_dir()
+                        try:
+                            for item in data_dir.iterdir():
+                                if item.name == "settings.json" and not inc_settings:
+                                    continue
+                                if item.is_dir():
+                                    import shutil
+                                    shutil.rmtree(item)
+                                else:
+                                    item.unlink()
+                            ui.notify("Data deleted! Please restart QuizSage.", type="positive", timeout=10000)
+                        except Exception as e:
+                            ui.notify(f"Error deleting data: {e}", type="negative")
+                            
+                    ui.button("Delete all local data", on_click=prompt_delete, color="red").props("outline size=sm").tooltip("Delete local history, cache, profiles, and optionally settings/keys.")
+
+            def save_all_settings():
+                new_s = {
+                    "keys": {
+                        "groq": [k.strip() for k in groq_keys_ta.value.splitlines() if k.strip()],
+                        "gemini": [k.strip() for k in gemini_keys_ta.value.splitlines() if k.strip()],
+                        "openrouter": [k.strip() for k in openrouter_keys_ta.value.splitlines() if k.strip()]
+                    },
+                    "models": {
+                        "groq_primary": groq_prim_in.value,
+                        "groq_fallback": groq_fall_in.value,
+                        "groq_tertiary": groq_tert_in.value,
+                        "gemini": gemini_mod_in.value,
+                        "openrouter": openrouter_mod_in.value
+                    },
+                    "custom_providers": [
+                        {
+                            "name": p["n"].value,
+                            "base_url": p["b"].value,
+                            "model": p["m"].value,
+                            "keys": [k.strip() for k in p["k"].value.splitlines() if k.strip()]
+                        } for p in custom_provider_uis
+                    ],
+                    "behaviour": {
+                        "auto_submit": b_auto_sub.value,
+                        "auto_close_browser": b_auto_close.value,
+                        "human_delay": b_human.value,
+                        "confidence_warn_threshold": b_conf.value,
+                        "subject_context": b_subj.value,
+                        "min_action_delay": b_min_delay.value,
+                        "max_action_delay": b_max_delay.value,
+                        "page_transition_wait": b_page_wait.value,
+                        "quota_warn_groq": b_warn_groq.value,
+                        "quota_warn_gemini": b_warn_gemini.value
+                    },
+                    "student": {
+                        "name": stu_name.value,
+                        "roll": stu_roll.value,
+                        "branch": stu_branch.value,
+                        "section": stu_section.value,
+                        "email": stu_email.value
+                    },
+                    "appearance": {
+                        "dark_mode": a_dark.value,
+                        "primary": a_prim.value,
+                        "secondary": a_sec.value,
+                        "accent": a_acc.value
+                    },
+                    "launch": {
+                        "native_window": l_native.value
+                    }
+                }
+                settings.save_settings(new_s)
+                config.reload_from_settings()
+                import solver
+                solver.rebuild_pools()
+                ui.notify("Settings and keys saved — active immediately, no restart needed.", type="positive")
+                _update_quota_label()
+                form_parser._INFO_MAP.clear()
+
     # ════════════════════════════════════════════════════════════
+
     #  Re-solve dialog
     # ════════════════════════════════════════════════════════════
     
@@ -1076,7 +1195,7 @@ async def index():
                     
                     sanitized_subj = sanitize_filename(eff_subject)
                     sanitized_title = sanitize_filename(notes_title)
-                    notes_dir = os.path.join("notes", sanitized_subj)
+                    notes_dir = os.path.join(str(settings.get_data_dir()), "notes", sanitized_subj)
                     os.makedirs(notes_dir, exist_ok=True)
                     notes_path = os.path.join(notes_dir, f"{sanitized_title}.md")
                     
@@ -1146,10 +1265,23 @@ async def index():
 # ════════════════════════════════════════════════════════════════
 
 if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        import webview
+        has_webview = True
+    except ImportError:
+        has_webview = False
+        
+    native = getattr(config, "LAUNCH_NATIVE_WINDOW", False)
+    if native and not has_webview:
+        print("WARNING: pywebview not installed. Falling back to browser mode.")
+        native = False
+        
     ui.run(
         title="QuizSage",
         port=8080,
         reload=False,
         show=True,
         favicon="🧙",
+        native=native,
+        window_size=(1280, 800) if native else None
     )

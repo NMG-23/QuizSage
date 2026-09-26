@@ -134,8 +134,26 @@ def _build_question_block(q: ParsedQuestion) -> str:
 #  API key-pool rotation
 # ════════════════════════════════════════════════════════════════
 
-gemini_pool = itertools.cycle(config.GEMINI_API_KEYS) if config.GEMINI_API_KEYS else None
-groq_pool = itertools.cycle(config.GROQ_API_KEYS) if config.GROQ_API_KEYS else None
+gemini_pool = None
+groq_pool = None
+openrouter_pool = None
+custom_pools = {}
+
+def rebuild_pools():
+    global gemini_pool, groq_pool, openrouter_pool, custom_pools
+    gemini_pool = itertools.cycle(config.GEMINI_API_KEYS) if config.GEMINI_API_KEYS else None
+    groq_pool = itertools.cycle(config.GROQ_API_KEYS) if config.GROQ_API_KEYS else None
+    openrouter_pool = itertools.cycle(config.OPENROUTER_API_KEYS) if getattr(config, 'OPENROUTER_API_KEYS', []) else None
+    
+    custom_pools = {}
+    for p in getattr(config, 'CUSTOM_PROVIDERS', []):
+        slug = re.sub(r'[^a-z0-9]+', '-', p.get('name', '').lower()).strip('-')
+        if not slug: continue
+        keys = p.get('keys', [])
+        if keys:
+            custom_pools[slug] = itertools.cycle(keys)
+
+rebuild_pools()
 
 
 # ════════════════════════════════════════════════════════════════
@@ -264,6 +282,95 @@ def _call_gemini(
             raise QuotaExhaustedError(f"API quota exhausted for all keys: {err_msg[:120]}") from last_err
         raise last_err
     raise RuntimeError("Failed to call Gemini")
+
+def _call_openrouter(prompt: str, model_override: str | None = None) -> str:
+    from openai import OpenAI
+    
+    if not getattr(config, 'OPENROUTER_API_KEYS', []):
+        raise ValueError("Missing OPENROUTER_API_KEYS in settings.")
+        
+    for _ in range(len(config.OPENROUTER_API_KEYS)):
+        try:
+            key = key_health.next_healthy_key("openrouter", config.OPENROUTER_API_KEYS, openrouter_pool)
+        except key_health.NoHealthyKeysError:
+            break
+            
+        for retry in range(3):
+            quota_tracker.record_call("openrouter")
+            try:
+                client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=key)
+                response = client.chat.completions.create(
+                    model=model_override or getattr(config, 'OPENROUTER_MODEL', "openrouter/auto"),
+                    messages=[
+                        {"role": "system", "content": _get_system_prompt()},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.1,
+                    max_tokens=4096,
+                )
+                return response.choices[0].message.content or ""
+            except Exception as exc:
+                if key_health.is_401(exc):
+                    key_health.mark_dead("openrouter", key)
+                    print(f"  ⚠️  OpenRouter key …{key_health.key_id(key)} retired (401 invalid key)")
+                    break
+                if key_health.is_quota_error(exc):
+                    if retry < 2:
+                        time.sleep(2 ** (retry + 1))
+                        continue
+                    key_health.mark_exhausted("openrouter", key)
+                    print(f"  ⚠️  OpenRouter key …{key_health.key_id(key)} quota exhausted — trying next key")
+                    break
+                raise
+    raise key_health.NoHealthyKeysError("openrouter")
+
+
+def _call_custom(cfg: dict, prompt: str) -> str:
+    from openai import OpenAI
+    
+    slug = re.sub(r'[^a-z0-9]+', '-', cfg.get('name', '').lower()).strip('-')
+    keys = cfg.get('keys', [])
+    if not keys:
+        raise ValueError(f"Missing keys for custom provider {slug}.")
+        
+    pool = custom_pools.get(slug)
+    if not pool:
+        raise ValueError(f"Provider pool missing for {slug}.")
+    
+    for _ in range(len(keys)):
+        try:
+            key = key_health.next_healthy_key(slug, keys, pool)
+        except key_health.NoHealthyKeysError:
+            break
+            
+        for retry in range(3):
+            quota_tracker.record_call(slug)
+            try:
+                client = OpenAI(base_url=cfg.get("base_url"), api_key=key)
+                response = client.chat.completions.create(
+                    model=cfg.get("model"),
+                    messages=[
+                        {"role": "system", "content": _get_system_prompt()},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.1,
+                    max_tokens=4096,
+                )
+                return response.choices[0].message.content or ""
+            except Exception as exc:
+                if key_health.is_401(exc):
+                    key_health.mark_dead(slug, key)
+                    print(f"  ⚠️  {slug} key …{key_health.key_id(key)} retired (401 invalid key)")
+                    break
+                if key_health.is_quota_error(exc):
+                    if retry < 2:
+                        time.sleep(2 ** (retry + 1))
+                        continue
+                    key_health.mark_exhausted(slug, key)
+                    print(f"  ⚠️  {slug} key …{key_health.key_id(key)} quota exhausted — trying next key")
+                    break
+                raise
+    raise key_health.NoHealthyKeysError(slug)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -412,12 +519,48 @@ def solve_questions(
                     results.extend(batch.answers)
                     print(f"  ✅ Groq tertiary fallback ({config.GROQ_TERTIARY_MODEL}) solved {len(batch.answers)} text question(s)")
                 except Exception as exc_tertiary:
-                    print(f"  ⚠️  Groq tertiary fallback also failed ({exc_tertiary}), cascading to Gemini …")
+                    print(f"  ⚠️  Groq tertiary fallback also failed ({exc_tertiary}), cascading to OpenRouter …")
                     groq_failed = True
+
+    # ── Step 1.1: OpenRouter ────────────────────────────────
+    openrouter_failed = groq_failed
+    if openrouter_failed and getattr(config, 'OPENROUTER_API_KEYS', []) and text_qs:
+        try:
+            print(f"  🔄 Retrying text questions with OpenRouter ({getattr(config, 'OPENROUTER_MODEL', '')})...")
+            raw = _call_openrouter(prompt)
+            batch = _parse_llm_json(raw)
+            batch = _retry_low_confidence(batch, text_qs)
+            results.extend(batch.answers)
+            print(f"  ✅ OpenRouter solved {len(batch.answers)} text question(s)")
+            openrouter_failed = False
+        except key_health.NoHealthyKeysError:
+            print("  ⚠️  No usable OpenRouter keys left")
+        except Exception as exc:
+            print(f"  ⚠️  OpenRouter failed: {exc}")
+
+    # ── Step 1.2: Custom Providers ──────────────────────────
+    custom_failed = openrouter_failed
+    if custom_failed and getattr(config, 'CUSTOM_PROVIDERS', []) and text_qs:
+        for cfg in config.CUSTOM_PROVIDERS:
+            if not cfg.get("keys"): continue
+            slug = re.sub(r'[^a-z0-9]+', '-', cfg.get('name', '').lower()).strip('-')
+            try:
+                print(f"  🔄 Retrying text questions with Custom Provider ({slug} - {cfg.get('model')})...")
+                raw = _call_custom(cfg, prompt)
+                batch = _parse_llm_json(raw)
+                batch = _retry_low_confidence(batch, text_qs)
+                results.extend(batch.answers)
+                print(f"  ✅ {slug} solved {len(batch.answers)} text question(s)")
+                custom_failed = False
+                break
+            except key_health.NoHealthyKeysError:
+                print(f"  ⚠️  No usable keys left for {slug}")
+            except Exception as exc:
+                print(f"  ⚠️  {slug} failed: {exc}")
 
     # ── Step 2: Gemini for multimodal + cascade ─────────────
     gemini_qs = list(image_qs)
-    if groq_failed:
+    if custom_failed:
         gemini_qs.extend(text_qs)
 
     if gemini_qs:

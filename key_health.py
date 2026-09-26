@@ -7,8 +7,9 @@ from datetime import datetime, timedelta, timezone
 import threading
 
 import config
+import settings
 
-KEY_HEALTH_FILE = "key_health.json"
+KEY_HEALTH_FILE = str(settings.get_data_dir() / "key_health.json")
 _lock = threading.Lock()
 _events = deque(maxlen=50)
 

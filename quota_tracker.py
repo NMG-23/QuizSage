@@ -2,8 +2,9 @@ import os
 import json
 import threading
 from datetime import datetime, timezone
+import settings
 
-QUOTA_FILE = "quota.json"
+QUOTA_FILE = str(settings.get_data_dir() / "quota.json")
 _quota_lock = threading.Lock()
 
 def _load_quota() -> dict:
