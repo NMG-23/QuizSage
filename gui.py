@@ -36,6 +36,7 @@ import config
 import history_manager
 import form_parser
 import quota_tracker
+import key_health
 from form_parser import ParsedQuestion
 from solver import solve_questions, AnswerItem, QuotaExhaustedError
 
@@ -667,12 +668,34 @@ async def index():
                     "text-lg font-semibold text-zinc-300 mb-2"
                 )
                 quota_ui = ui.html().classes("mb-2").tooltip("API calls made today per provider. Resets at midnight.")
+                key_health_ui = ui.html().classes("mb-2 ml-4")
+                
+                def on_reset_keys():
+                    key_health.reset_all()
+                    ui.notify("All API keys marked healthy.", type="positive")
+                    _update_quota_label()
+                    
+                ui.button("Reset dead keys", on_click=on_reset_keys).props("outline size=sm color=grey").classes("ml-2 mb-2").tooltip("Mark all API keys healthy again (clears dead and quota-exhausted states). Use after replacing keys in .env (restart the app to load new .env keys).")
                 
                 def _update_quota_label():
                     gemini, groq = quota_tracker.get_counts()
                     g_color = "orange" if config.QUOTA_WARN_GEMINI and gemini >= config.QUOTA_WARN_GEMINI else "inherit"
                     gr_color = "orange" if config.QUOTA_WARN_GROQ and groq >= config.QUOTA_WARN_GROQ else "inherit"
                     quota_ui.content = f'<span class="text-sm text-zinc-400">API today — Gemini: <span style="color: {g_color}">{gemini}</span> &middot; Groq: <span style="color: {gr_color}">{groq}</span></span>'
+                    
+                    groq_usable, groq_total = key_health.healthy_count("groq", config.GROQ_API_KEYS)
+                    gemini_usable, gemini_total = key_health.healthy_count("gemini", config.GEMINI_API_KEYS)
+                    
+                    groq_str = f"{groq_usable}/{groq_total}" if config.GROQ_API_KEYS else "—"
+                    gemini_str = f"{gemini_usable}/{gemini_total}" if config.GEMINI_API_KEYS else "—"
+                    
+                    kh_color = "inherit"
+                    if (config.GROQ_API_KEYS and groq_usable == 0) or (config.GEMINI_API_KEYS and gemini_usable == 0):
+                        kh_color = "red"
+                    elif (config.GROQ_API_KEYS and groq_usable < groq_total) or (config.GEMINI_API_KEYS and gemini_usable < gemini_total):
+                        kh_color = "orange"
+                    
+                    key_health_ui.content = f'<span class="text-sm font-semibold" style="color: {kh_color}">Keys — Groq {groq_str} &middot; Gemini {gemini_str}</span>'
                 
                 _update_quota_label()
 
@@ -1112,6 +1135,15 @@ async def index():
                     cache_hits = sum(1 for a in all_a if getattr(a, "from_cache", False))
                     ui.notify(f"Solved {len(all_q)} questions ({cache_hits} from cache)", type="positive")
                     _update_quota_label()
+                    
+                # ── Process health events ─────────────────────────────
+                events = key_health.drain_events()
+                for ev in events:
+                    provider = "Groq" if ev["provider"] == "groq" else "Gemini"
+                    if ev["reason"] == "401":
+                        ui.notify(f"{provider} key …{ev['key_id']} retired (invalid key).", type="warning", timeout=5000)
+                    elif ev["reason"] == "quota-exhausted":
+                        ui.notify(f"{provider} key …{ev['key_id']} quota exhausted — trying next key.", type="warning", timeout=5000)
 
                 # ── Populate audit table ───────────────────────────
                 rows = []

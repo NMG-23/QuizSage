@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 import config
 import quota_tracker
 import answer_cache
+import key_health
 from form_parser import ParsedQuestion
 
 
@@ -148,19 +149,40 @@ def _call_groq(prompt: str, model_override: str | None = None) -> str:
     if not config.GROQ_API_KEYS:
         raise ValueError("Missing GROQ_API_KEY in .env file.")
 
-    current_key = next(groq_pool)
-    client = Groq(api_key=current_key)
-    quota_tracker.record_call("groq")
-    chat = client.chat.completions.create(
-        model=model_override or config.GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": _get_system_prompt()},
-            {"role": "user",   "content": prompt},
-        ],
-        temperature=0.1,
-        max_tokens=4096,
-    )
-    return chat.choices[0].message.content or ""
+    for _ in range(len(config.GROQ_API_KEYS)):
+        try:
+            key = key_health.next_healthy_key("groq", config.GROQ_API_KEYS, groq_pool)
+        except key_health.NoHealthyKeysError:
+            break
+            
+        for retry in range(3):
+            quota_tracker.record_call("groq")
+            try:
+                client = Groq(api_key=key)
+                chat = client.chat.completions.create(
+                    model=model_override or config.GROQ_MODEL,
+                    messages=[
+                        {"role": "system", "content": _get_system_prompt()},
+                        {"role": "user",   "content": prompt},
+                    ],
+                    temperature=0.1,
+                    max_tokens=4096,
+                )
+                return chat.choices[0].message.content or ""
+            except Exception as exc:
+                if key_health.is_401(exc):
+                    key_health.mark_dead("groq", key)
+                    print(f"  ⚠️  Groq key …{key_health.key_id(key)} retired (401 invalid key)")
+                    break
+                if key_health.is_quota_error(exc):
+                    if retry < 2:
+                        time.sleep(2 ** (retry + 1))
+                        continue
+                    key_health.mark_exhausted("groq", key)
+                    print(f"  ⚠️  Groq key …{key_health.key_id(key)} quota exhausted — trying next key")
+                    break
+                raise
+    raise key_health.NoHealthyKeysError("groq")
 
 
 def _call_gemini(
@@ -194,34 +216,52 @@ def _call_gemini(
             )
 
     last_err = None
-    for attempt in range(3):
-        current_key = next(gemini_pool)
-        client = genai.Client(api_key=current_key)
-        quota_tracker.record_call("gemini")
+    for _ in range(len(config.GEMINI_API_KEYS)):
         try:
-            response = client.models.generate_content(
-                model=config.GEMINI_MODEL,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=_get_system_prompt(),
-                    temperature=0.1,
-                    max_output_tokens=4096,
-                ),
-            )
-            return response.text or ""
-        except Exception as e:
-            msg = str(e)
-            if "503" in msg or "429" in msg or "UNAVAILABLE" in msg or "RESOURCE_EXHAUSTED" in msg:
-                last_err = e
-                wait = 5 * (attempt + 1)
-                print(f"  ⚠️  Gemini transient error ({msg[:80]}). Retrying in {wait}s (attempt {attempt+1}/3)...")
-                time.sleep(wait)
-                continue
-            raise
+            current_key = key_health.next_healthy_key("gemini", config.GEMINI_API_KEYS, gemini_pool)
+        except key_health.NoHealthyKeysError:
+            break
+            
+        for attempt in range(3):
+            client = genai.Client(api_key=current_key)
+            quota_tracker.record_call("gemini")
+            try:
+                response = client.models.generate_content(
+                    model=config.GEMINI_MODEL,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=_get_system_prompt(),
+                        temperature=0.1,
+                        max_output_tokens=4096,
+                    ),
+                )
+                return response.text or ""
+            except Exception as e:
+                if key_health.is_401(e):
+                    key_health.mark_dead("gemini", current_key)
+                    print(f"  ⚠️  Gemini key …{key_health.key_id(current_key)} retired (invalid key)")
+                    last_err = e
+                    break
+                    
+                msg = str(e)
+                if key_health.is_quota_error(e) or "503" in msg or "UNAVAILABLE" in msg:
+                    last_err = e
+                    if attempt < 2:
+                        wait = 5 * (attempt + 1)
+                        print(f"  ⚠️  Gemini transient error ({msg[:80]}). Retrying in {wait}s (attempt {attempt+1}/3)...")
+                        time.sleep(wait)
+                        continue
+                        
+                    if key_health.is_quota_error(e):
+                        key_health.mark_exhausted("gemini", current_key)
+                        print(f"  ⚠️  Gemini key …{key_health.key_id(current_key)} quota exhausted — trying next key")
+                    break
+                raise
+
     if last_err:
         err_msg = str(last_err)
-        if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
-            raise QuotaExhaustedError(f"API quota exhausted after full retry sequence: {err_msg[:120]}") from last_err
+        if key_health.is_quota_error(last_err) or "quota" in err_msg.lower():
+            raise QuotaExhaustedError(f"API quota exhausted for all keys: {err_msg[:120]}") from last_err
         raise last_err
     raise RuntimeError("Failed to call Gemini")
 
@@ -350,6 +390,9 @@ def solve_questions(
             batch = _retry_low_confidence(batch, text_qs)
             results.extend(batch.answers)
             print(f"  ✅ Groq ({config.GROQ_MODEL}) solved {len(batch.answers)} text question(s)")
+        except key_health.NoHealthyKeysError:
+            print("  ⚠️  No usable Groq keys left — cascading to Gemini")
+            groq_failed = True
         except Exception as exc:
             print(f"  ⚠️  Groq ({config.GROQ_MODEL}) failed: {exc}")
             try:
