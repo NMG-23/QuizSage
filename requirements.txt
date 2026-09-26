@@ -22,3 +22,7 @@ httpx
 
 # Excel file parsing
 openpyxl
+
+# Additional providers and desktop mode
+openai
+pywebview
