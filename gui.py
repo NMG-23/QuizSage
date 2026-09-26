@@ -10,7 +10,6 @@ Opens a local browser dashboard at http://localhost:8080 with:
   • Auto-submit / human-delay toggle switches
   • Duplicate-run pre-check with override dialog
   • Non-blocking live execution with streaming log terminal
-  • Audit results table with low-confidence flagging
 """
 
 from __future__ import annotations
@@ -458,7 +457,7 @@ def _run_solve_pipeline(
                     print(f"Form {status}!")
             elif submit_btn:
                 print("AUTO_SUBMIT is OFF — answers filled, not submitted.")
-                print("Review the audit table and use the UI buttons to submit or discard.")
+                print("Review and use the UI buttons to submit or discard.")
                 history_manager.record_run(url, total_solved, "filled")
                 status = "filled"
 
@@ -582,7 +581,6 @@ async def index():
 
     # ── Reactive state ─────────────────────────────────────────
     status_label = STATUS_IDLE
-    results_rows: list[dict] = []
     
     wait_for_user_action = threading.Event()
     user_decision = {}
@@ -819,77 +817,41 @@ async def index():
             )
             log_box.push("QuizSage terminal ready. Paste a URL and hit Solve.")
 
-        # ─── Audit Results Table ───────────────────────────────
-        with ui.card().classes(
-            "w-full bg-zinc-900/80 border border-zinc-800 backdrop-blur"
-        ):
-            ui.label("Audit Results").classes(
-                "text-lg font-semibold text-zinc-300 mb-2"
-            )
-            ui.separator().classes("mb-3")
-
-            results_table = ui.table(
-                columns=[
-                    {"name": "form",       "label": "Form / Subject", "field": "form",       "align": "left", "sortable": True},
-                    {"name": "qnum",       "label": "Q#",         "field": "qnum",       "align": "center", "sortable": True},
-                    {"name": "type",       "label": "Type",       "field": "type",       "align": "center"},
-                    {"name": "confidence", "label": "Confidence", "field": "confidence", "align": "center", "sortable": True},
-                    {"name": "answer",     "label": "Answer",     "field": "answer"},
-                    {"name": "reasoning",  "label": "Reasoning",  "field": "reasoning"},
-                ],
-                rows=[],
-            ).classes("w-full").props(
-                'dense flat bordered separator="cell" '
-                'row-key="qnum" wrap-cells'
-            )
-
-            # Slot template for confidence column — red if < 70%
-            results_table.add_slot(
-                "body-cell-confidence",
-                r"""
-                <q-td :props="props">
-                    <q-badge
-                        :color="parseFloat(props.value) < 70 ? 'red' : 'green'"
-                        :label="props.value"
-                        class="text-sm px-2 py-1"
-                    />
-                </q-td>
-                """,
-            )
+        # Manual Action Buttons
+        with ui.row().classes("w-full justify-end gap-4 mt-4 hidden") as manual_action_container:
             
-            # Manual Action Buttons
-            with ui.row().classes("w-full justify-end gap-4 mt-4 hidden") as manual_action_container:
+            def on_discard():
+                user_decision["submit"] = False
+                wait_for_user_action.set()
+                manual_action_container.classes(add="hidden")
                 
-                def on_discard():
-                    user_decision["submit"] = False
+            async def on_submit():
+                with ui.dialog() as confirm_dialog, ui.card().classes("bg-zinc-900 border border-zinc-700"):
+                    ui.label("Submit Form?").classes("text-lg font-bold text-zinc-200")
+                    ui.label("Are you sure you want to submit this form in the browser?").classes("text-sm text-zinc-400 mt-2")
+                    with ui.row().classes("w-full justify-end gap-3 mt-4"):
+                        ui.button("Cancel", on_click=lambda: confirm_dialog.submit(False)).props("flat color=grey").tooltip("Go back without submitting.")
+                        ui.button("Yes, Submit", on_click=lambda: confirm_dialog.submit(True), color="green").props("unelevated rounded").tooltip("Confirm and submit the form in the browser now.")
+                
+                confirmed = await confirm_dialog
+                if confirmed:
+                    user_decision["submit"] = True
                     wait_for_user_action.set()
                     manual_action_container.classes(add="hidden")
-                    
-                async def on_submit():
-                    with ui.dialog() as confirm_dialog, ui.card().classes("bg-zinc-900 border border-zinc-700"):
-                        ui.label("Submit Form?").classes("text-lg font-bold text-zinc-200")
-                        ui.label("Are you sure you want to submit this form in the browser?").classes("text-sm text-zinc-400 mt-2")
-                        with ui.row().classes("w-full justify-end gap-3 mt-4"):
-                            ui.button("Cancel", on_click=lambda: confirm_dialog.submit(False)).props("flat color=grey").tooltip("Go back without submitting.")
-                            ui.button("Yes, Submit", on_click=lambda: confirm_dialog.submit(True), color="green").props("unelevated rounded").tooltip("Confirm and submit the form in the browser now.")
-                    
-                    confirmed = await confirm_dialog
-                    if confirmed:
-                        user_decision["submit"] = True
-                        wait_for_user_action.set()
-                        manual_action_container.classes(add="hidden")
-                        _set_status(STATUS_RUNNING)
+                    _set_status(STATUS_RUNNING)
 
-                ui.button("Discard & Close", on_click=on_discard, color="grey").props("outline rounded").tooltip("Throw away the filled answers and close the browser window.")
-                ui.button("Submit Form", on_click=on_submit, color="green").props("unelevated rounded").tooltip("Submit the filled answers in the browser after a confirmation prompt.")
+            ui.button("Discard & Close", on_click=on_discard, color="grey").props("outline rounded").tooltip("Throw away the filled answers and close the browser window.")
+            ui.button("Submit Form", on_click=on_submit, color="green").props("unelevated rounded").tooltip("Submit the filled answers in the browser after a confirmation prompt.")
 
         # ─── Form History ───────────────────────────────
         with ui.card().classes(
             "w-full bg-zinc-900/80 border border-zinc-800 backdrop-blur"
         ):
             with ui.row().classes("w-full items-center justify-between"):
-                ui.label("Form History").classes("text-lg font-semibold text-zinc-300 mb-2")
-                ui.button(icon="refresh", on_click=lambda: refresh_history()).props("flat round size=sm color=grey").tooltip("Reload the history table from disk.")
+                with ui.row().classes("items-center gap-2 mb-2"):
+                    ui.label("Form History").classes("text-lg font-semibold text-zinc-300")
+                    ui.icon("info", color="grey").tooltip("Score scraped from the form's 'View score' page right after submission. 'Not released' means the form didn't display one — the teacher may release grades later.")
+                ui.button(icon="refresh", on_click=lambda: refresh_history()).props("flat round size=sm color=grey mb-2").tooltip("Reload the history table from disk.")
                 
             ui.separator().classes("mb-3")
             
@@ -899,6 +861,7 @@ async def index():
                     {"name": "url", "label": "Form URL", "field": "url", "align": "left"},
                     {"name": "questions", "label": "Questions", "field": "questions", "align": "center"},
                     {"name": "status", "label": "Status", "field": "status", "align": "center", "sortable": True},
+                    {"name": "score", "label": "Score", "field": "score", "align": "center"},
                     {"name": "action", "label": "Action", "field": "action", "align": "center"},
                 ],
                 rows=[]
@@ -928,7 +891,8 @@ async def index():
                         "url": display_url,
                         "raw_url": k,
                         "questions": str(v.get("questions_solved", "?")),
-                        "status": v.get("status", "unknown")
+                        "status": v.get("status", "unknown"),
+                        "score": v.get("score") if v.get("score") else "Not released",
                     })
                 history_table.rows = rows
                 history_table.update()
@@ -1043,8 +1007,6 @@ async def index():
         manual_subject = (subject_input.value or "").strip()
 
         # ── Clear previous results ─────────────────────────────
-        results_table.rows.clear()
-        results_table.update()
         log_box.clear()
 
         solved_count = 0
@@ -1086,7 +1048,7 @@ async def index():
                     manual_action_container.classes(remove="hidden")
 
                 try:
-                    all_q, all_a, final_status, form_score, form_scraped_title = await run.io_bound(
+                    all_q, all_a, final_status, score, form_scraped_title = await run.io_bound(
                         _run_solve_pipeline, raw_url, eff_subject, log_writer,
                         wait_for_user_action, user_decision, show_manual_actions
                     )
@@ -1118,7 +1080,7 @@ async def index():
                     os.makedirs(notes_dir, exist_ok=True)
                     notes_path = os.path.join(notes_dir, f"{sanitized_title}.md")
                     
-                    score_str = f'"{form_score}"' if form_score else "null"
+                    score_str = f'"{score}"' if score else "null"
                     
                     notes_content = f"---\ntitle: \"{notes_title}\"\nsubject: \"{eff_subject}\"\nsource_url: \"{raw_url}\"\ndate_solved: \"{datetime.now(timezone.utc).isoformat()}\"\nscore: {score_str}\nquestion_count: {len(all_q)}\n---\n# {notes_title}\n## Q&A\n"
                     for q, a in zip(all_q, all_a):
@@ -1133,7 +1095,10 @@ async def index():
                         log_box.push(f"❌ Failed to save notes: {e}")
                         
                     cache_hits = sum(1 for a in all_a if getattr(a, "from_cache", False))
-                    ui.notify(f"Solved {len(all_q)} questions ({cache_hits} from cache)", type="positive")
+                    if score:
+                        ui.notify(f"Submitted — Score: {score}", type="positive")
+                    else:
+                        ui.notify("Submitted — score not released by this form.", type="positive")
                     _update_quota_label()
                     
                 # ── Process health events ─────────────────────────────
@@ -1145,27 +1110,6 @@ async def index():
                     elif ev["reason"] == "quota-exhausted":
                         ui.notify(f"{provider} key …{ev['key_id']} quota exhausted — trying next key.", type="warning", timeout=5000)
 
-                # ── Populate audit table ───────────────────────────
-                rows = []
-                for q, a in zip(all_q, all_a):
-                    if a.selected_options:
-                        ans_text = " | ".join(a.selected_options)
-                    elif a.short_answer_text:
-                        ans_text = a.short_answer_text[:120]
-                    else:
-                        ans_text = "—"
-
-                    rows.append({
-                        "form":       f"{eff_subject} (Form {i+1})",
-                        "qnum":       str(q.index + 1),
-                        "type":       q.q_type,
-                        "confidence": f"{a.confidence * 100:.0f}%",
-                        "answer":     ans_text,
-                        "reasoning":  a.reasoning[:150],
-                    })
-
-                results_table.rows.extend(rows)
-                results_table.update()
 
                 if final_status == "error":
                     _set_status(STATUS_ERROR)
