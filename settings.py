@@ -101,8 +101,9 @@ def load_settings():
             is_fresh = True
     
     # Deep merge
+    import copy
     def merge(default, cur):
-        res = default.copy() if isinstance(default, dict) else default
+        res = copy.deepcopy(default) if isinstance(default, dict) else default
         if isinstance(cur, dict) and isinstance(res, dict):
             for k, v in cur.items():
                 if k in res and isinstance(res[k], dict):

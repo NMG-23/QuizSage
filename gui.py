@@ -43,8 +43,18 @@ from solver import solve_questions, AnswerItem, QuotaExhaustedError
 
 
 # ════════════════════════════════════════════════════════════════
-#  Constants
+#  Constants & Frozen setup
 # ════════════════════════════════════════════════════════════════
+
+import multiprocessing
+
+if getattr(sys, "frozen", False):
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(settings.get_data_dir() / "browsers"))
+    
+    if "--install-browser" in sys.argv:
+        from playwright.__main__ import main as playwright_main
+        sys.argv = ["playwright", "install", "chromium"]
+        sys.exit(playwright_main())
 
 SOLVED_FILE = str(settings.get_data_dir() / "solved.json")
 
@@ -529,6 +539,44 @@ def _run_solve_pipeline(
 @ui.page("/")
 async def index():
     """Build the entire QuizSage dashboard."""
+
+    if getattr(sys, "frozen", False):
+        browsers_path = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", ""))
+        exe_name = "chrome.exe" if os.name == "nt" else "chrome"
+        if not browsers_path.exists() or not list(browsers_path.rglob(exe_name)):
+            with ui.dialog().props("persistent") as install_dialog, ui.card().classes("bg-zinc-900 border border-zinc-700 min-w-[380px] p-6 text-center items-center"):
+                ui.label("First Launch: Downloading Chromium (~170MB)").classes("text-lg font-bold text-amber-400 mb-2")
+                ui.label("This happens once and may take a few minutes.").classes("text-sm text-zinc-300 mb-4")
+                spinner = ui.spinner('dots', size='lg', color="amber").classes("my-4")
+                error_lbl = ui.label("").classes("text-red-500 text-sm hidden whitespace-pre-wrap")
+                close_btn = ui.button("Close", on_click=install_dialog.close).classes("hidden mt-4").props("flat color=grey")
+            
+            install_dialog.open()
+            
+            async def _do_install():
+                try:
+                    env = os.environ.copy()
+                    proc = await asyncio.create_subprocess_exec(
+                        sys.executable, "--install-browser",
+                        env=env,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    stdout, stderr = await proc.communicate()
+                    if proc.returncode != 0:
+                        spinner.classes(add="hidden")
+                        error_lbl.text = f"Install failed (code {proc.returncode}):\n{stderr.decode()}"
+                        error_lbl.classes(remove="hidden")
+                        close_btn.classes(remove="hidden")
+                    else:
+                        install_dialog.close()
+                except Exception as e:
+                    spinner.classes(add="hidden")
+                    error_lbl.text = f"Install failed: {e}"
+                    error_lbl.classes(remove="hidden")
+                    close_btn.classes(remove="hidden")
+                    
+            ui.timer(0.5, _do_install, once=True)
 
     # ── Page-level dark mode & custom CSS ──────────────────────
     s, _ = settings.load_settings()
@@ -1265,6 +1313,7 @@ async def index():
 # ════════════════════════════════════════════════════════════════
 
 if __name__ in {"__main__", "__mp_main__"}:
+    multiprocessing.freeze_support()
     try:
         import webview
         has_webview = True
