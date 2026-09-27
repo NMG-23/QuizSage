@@ -904,7 +904,7 @@ async def index():
             s, _ = settings.load_settings()
             
             with ui.expansion('API Keys', icon='key').classes('w-full bg-zinc-950'):
-                ui.add_head_html('<style>.password-mask textarea { -webkit-text-security: disc !important; }</style>')
+                ui.add_head_html('<style>.password-mask textarea { -webkit-text-security: disc; }</style>')
                 def toggle_mask(ta):
                     if 'password-mask' in ta.classes:
                         ta.classes(remove='password-mask')

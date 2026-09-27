@@ -14,10 +14,14 @@
 
 ## 🚀 Key Features
 
-- **4-Tier LLM Cascade Routing**: 
-  - **Primary**: **Groq (`openai/gpt-oss-120b`)** for instantaneous, zero-latency inference on text questions.
-  - **Secondary & Tertiary Fallbacks**: Automatically retries on **Groq (`qwen/qwen3.8-27b`)** and **Groq (`openai/gpt-oss-20b`)** if the primary model fails or rate-limits.
-  - **Quaternary & Multimodal**: Seamlessly falls back to a **Google Gemini (`gemini-3.6-flash`)** key-pool for image-based questions or if Groq is completely unavailable.
+- **Intelligent LLM Cascade Routing**: 
+  - **Primary**: **Groq** for instantaneous, zero-latency inference on text questions.
+  - **Secondary**: Automatically retries on **OpenRouter** if Groq fails or rate-limits.
+  - **Tertiary**: Falls back to your **Custom OpenAI-compatible providers**.
+  - **Quaternary & Multimodal**: Seamlessly falls back to a **Google Gemini** key-pool for image-based questions or if all other text providers are unavailable.
+- **API-Key Health Tracking & Quota Meter**: Built-in automatic failover and live UI tracking for your LLM API usage limits.
+- **Answer Cache**: Caches responses to identical questions to save API quota and speed up runs.
+- **Markdown Study Notes**: Automatically exports per-quiz markdown study notes containing the questions, AI answers, and confidence scores.
 - **Multi-Format Batch Upload**: Upload your quiz queue as `.txt`, `.csv`, or `.xlsx` — QuizSage auto-detects URL, subject, and title columns with case-insensitive header matching and falls back to regex URL extraction for unstructured files.
 - **Solved URL Tracking (`solved.json`)**: Every successfully submitted form is atomically saved to a local `solved.json` after each quiz — not at the end of a batch. If your API quota runs out mid-batch or the app crashes, all progress is preserved.
 - **Smart Upload Filtering**: On upload, already-solved URLs are auto-skipped and duplicates are removed, with clear notifications for each.
@@ -26,8 +30,8 @@
 - **Persistent Google Sessions**: No need to log in repeatedly! QuizSage maintains a secure, local persistent Chromium profile (`login.py`) so you can bypass restricted form locks seamlessly.
 - **Robust Student Auto-Fill**: Intelligently detects and clicks matching **Radio buttons, Checkboxes, and Textboxes** for Name, Roll Number, Branch, Section, and Email fields, tagging them so the AI never hallucinates over them.
 - **Interactive UI Dashboard**: 
-  - **Live Audit Table**: Highlights low-confidence AI answers in red so you can double-check the reasoning before submitting.
-  - **Form History**: Automatically logs your runs (Submitted, Discarded, Blocked).
+  - **Low-Confidence Retries**: Answers below the confidence warn threshold (0.70, adjustable in Settings) are automatically retried with Gemini, bypass the local answer cache, and are tagged with their confidence scores in the exported Markdown study notes (e.g. `### 1. <question> (confidence 0.65)`).
+  - **Form History**: Automatically logs your runs (Submitted, Discarded, Blocked) and includes a Score column to track your success rate.
   - **Re-Solve Capability**: 1-click re-evaluation of draft forms from your history.
   - **Draft Preservation**: Intelligently leaves your existing manually selected answers untouched if the AI is uncertain or encounters an API error, ensuring safe re-evaluations.
   - **Safe UI Submission**: Thread-synchronized "Submit" and "Discard" buttons directly inside the dashboard.
@@ -43,7 +47,7 @@
 5. **Scrape & Solve Loop**:
    - Parses the DOM into `ParsedQuestion` objects (extracting titles, images, and widget types: Radio, Checkbox, Dropdown, Textbox).
    - Bundles the questions and injects your **Subject Context** (e.g. "DBMS").
-   - Ships them to the LLM backend via the 4-tier cascade pipeline.
+   - Ships them to the LLM backend via the intelligent cascade pipeline.
    - Applies the AI's exact text matches to the correct DOM locators in the browser.
 6. **Pagination**: It clicks "Next" and recursively repeats the loop for multi-page forms until it finds the "Submit" button.
 7. **Thread Handoff**: The background thread pauses securely for up to 10 minutes, passing control back to your UI to await your manual "Submit" or "Discard" confirmation.
@@ -79,14 +83,18 @@ playwright install chromium
 ```
 
 ### 4. Configure API Keys
-QuizSage uses `python-dotenv` to securely load API keys, protecting you from accidentally pushing secrets to GitHub.
+The primary way to manage API keys is directly within the QuizSage **Settings UI**. Keys are stored securely in `QuizSage_Data/settings.json` and are masked by default with a show/hide toggle. 
 
-Create a `.env` file in the root directory:
+For local development only, QuizSage also supports a `.env` file as a fallback. (Note: The frozen `.exe` build ignores the `.env` file entirely.)
+> **Pro Tip:** You can supply multiple Gemini API keys in the UI to enable round-robin rotation, dodging free-tier rate limits!
+
+## 🖥️ Desktop Build (Windows)
+
+QuizSage can be built into a standalone `.exe` using PyInstaller:
 ```bash
-GROQ_API_KEY=your_groq_key_here
-GEMINI_API_KEYS=your_gemini_key_1,your_gemini_key_2
+python build_exe.py
 ```
-> **Pro Tip:** You can supply a comma-separated list of Gemini API keys to enable round-robin rotation, dodging free-tier rate limits!
+This produces a single `dist/QuizSage.exe`. All application state (profiles, history, cache, API keys) lives in a portable `QuizSage_Data` folder (located in the repo root during dev, or beside the `.exe` when frozen). Chromium is not bundled to save space — instead, it is automatically installed into `QuizSage_Data/browsers` on first launch. If the default port 8080 is taken, the app automatically moves to the next free port and prints the actual URL to the console.
 
 ---
 
@@ -114,7 +122,7 @@ A sleek web interface will open at `http://localhost:8080`.
 4. Enter a **Subject Context** (e.g., "Physics Midterm") as a fallback for forms without a subject heading.
 5. Toggle **Auto-Submit** OFF (recommended for safety).
 6. Click **Solve with Sage**.
-7. Review the AI's logic in the **Audit Table**. Use the **Submit** or **Discard** buttons at the bottom of the table to finalize your run!
+7. Review the run and use the **Submit** or **Discard** buttons in the dashboard to finalize your form!
 8. If quota runs out mid-batch, QuizSage stops gracefully — all submitted forms are saved. Re-upload and re-run to continue.
 
 ### Step 4: History & Re-Solving
