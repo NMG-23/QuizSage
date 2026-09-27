@@ -19,6 +19,7 @@ import io
 import json
 import os
 import sys
+import socket
 import time
 import threading
 import asyncio
@@ -903,7 +904,7 @@ async def index():
             s, _ = settings.load_settings()
             
             with ui.expansion('API Keys', icon='key').classes('w-full bg-zinc-950'):
-                ui.add_head_html('<style>.password-mask textarea { -webkit-text-security: disc; }</style>')
+                ui.add_head_html('<style>.password-mask textarea { -webkit-text-security: disc !important; }</style>')
                 def toggle_mask(ta):
                     if 'password-mask' in ta.classes:
                         ta.classes(remove='password-mask')
@@ -1312,6 +1313,16 @@ async def index():
 #  Entry point
 # ════════════════════════════════════════════════════════════════
 
+def _find_free_port(preferred=8080, tries=20):
+    for port in range(preferred, preferred + tries):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('127.0.0.1', port))
+                return port
+        except OSError:
+            continue
+    return preferred
+
 if __name__ in {"__main__", "__mp_main__"}:
     multiprocessing.freeze_support()
     try:
@@ -1325,9 +1336,13 @@ if __name__ in {"__main__", "__mp_main__"}:
         print("WARNING: pywebview not installed. Falling back to browser mode.")
         native = False
         
+    port = _find_free_port(8080)
+    if port != 8080:
+        print(f"Port 8080 is in use; QuizSage will run on http://127.0.0.1:{port} instead.")
+        
     ui.run(
         title="QuizSage",
-        port=8080,
+        port=port,
         reload=False,
         show=True,
         favicon="🧙",
