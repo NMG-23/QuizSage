@@ -17,10 +17,13 @@ settings.migrate_legacy_data()
 # Load settings dict
 _current_settings, _is_fresh = settings.load_settings()
 
-load_dotenv()
+import sys
+
+if not getattr(sys, "frozen", False):
+    load_dotenv()
 
 # First-run seeding
-if _is_fresh:
+if _is_fresh and not getattr(sys, "frozen", False):
     _current_settings["keys"]["groq"] = [k.strip() for k in os.getenv("GROQ_API_KEY", "").split(",") if k.strip()]
     _current_settings["keys"]["gemini"] = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
     _current_settings["keys"]["openrouter"] = [k.strip() for k in os.getenv("OPENROUTER_API_KEYS", "").split(",") if k.strip()]
